@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import crosswalk
 from .analysis import analyze_track
-from .db import connect, upsert_track, upsert_track_tags
+from .db import connect, update_track_mbid, upsert_relations, upsert_track, upsert_track_tags
 from .metadata import discogs, lastfm, musicbrainz
 from .similarity import (
     DEFAULT_AUDIO_WEIGHT,
@@ -127,6 +127,146 @@ def enrich_tracks(db_path: str = DEFAULT_DB_PATH) -> None:
     print(f"완료: {len(rows)}곡의 태그를 {db_path}에 저장함")
 
 
+# 관계 타입 문자열은 MusicBrainz 커뮤니티가 자유롭게 붙이는 값이라 정확한 목록을 미리 다
+# 알 수 없음. 대신 "프로듀서/레이블/샘플/영향" 각 축에서 의미 있는 키워드로 느슨하게 매칭.
+_COLLAB_KEYWORDS = ("produc", "compos", "engineer", "mix", "master", "arrang", "program", "remix", "lyric")
+_SAMPLE_KEYWORDS = ("sampl",)
+_INFLUENCE_KEYWORDS = ("influenc",)
+
+
+def _relation_attributes(rel: dict) -> list:
+    attributes = list(rel.get("attributes") or [])
+    if rel.get("direction"):
+        attributes.append(f"direction:{rel['direction']}")
+    return attributes
+
+
+def _normalize_recording_relations(
+    mb_recording_id: str, track_artist: str, track_title: str, raw_relations: list[dict]
+) -> list[dict]:
+    """레코딩 관계 원본에서 프로듀서·작곡가·엔지니어 협업(recording->artist)과
+    샘플링(recording->recording) 관계만 골라 relations 테이블 형식으로 변환한다."""
+    relations = []
+    from_name = f"{track_artist} - {track_title}"
+    for rel in raw_relations:
+        rel_type = (rel.get("type") or "").lower()
+        target_type = rel.get("target-type")
+        if target_type == "artist" and any(k in rel_type for k in _COLLAB_KEYWORDS):
+            artist = rel.get("artist") or {}
+            relations.append(
+                {
+                    "source": "musicbrainz",
+                    "relation_type": rel.get("type"),
+                    "from_entity_type": "recording",
+                    "from_entity_id": mb_recording_id,
+                    "from_entity_name": from_name,
+                    "to_entity_type": "artist",
+                    "to_entity_id": artist.get("id"),
+                    "to_entity_name": artist.get("name"),
+                    "attributes": _relation_attributes(rel),
+                }
+            )
+        elif target_type == "recording" and any(k in rel_type for k in _SAMPLE_KEYWORDS):
+            recording = rel.get("recording") or {}
+            relations.append(
+                {
+                    "source": "musicbrainz",
+                    "relation_type": rel.get("type"),
+                    "from_entity_type": "recording",
+                    "from_entity_id": mb_recording_id,
+                    "from_entity_name": from_name,
+                    "to_entity_type": "recording",
+                    "to_entity_id": recording.get("id"),
+                    "to_entity_name": recording.get("title"),
+                    "attributes": _relation_attributes(rel),
+                }
+            )
+    return relations
+
+
+def _normalize_artist_relations(artist_mbid: str, artist_name: str, raw_relations: list[dict]) -> list[dict]:
+    """아티스트 관계 원본에서 레이블 소속(artist->label)과 영향 관계(artist->artist)만
+    골라 relations 테이블 형식으로 변환한다."""
+    relations = []
+    for rel in raw_relations:
+        rel_type = (rel.get("type") or "").lower()
+        target_type = rel.get("target-type")
+        if target_type == "label":
+            label = rel.get("label") or {}
+            relations.append(
+                {
+                    "source": "musicbrainz",
+                    "relation_type": rel.get("type"),
+                    "from_entity_type": "artist",
+                    "from_entity_id": artist_mbid,
+                    "from_entity_name": artist_name,
+                    "to_entity_type": "label",
+                    "to_entity_id": label.get("id"),
+                    "to_entity_name": label.get("name"),
+                    "attributes": _relation_attributes(rel),
+                }
+            )
+        elif target_type == "artist" and any(k in rel_type for k in _INFLUENCE_KEYWORDS):
+            artist = rel.get("artist") or {}
+            relations.append(
+                {
+                    "source": "musicbrainz",
+                    "relation_type": rel.get("type"),
+                    "from_entity_type": "artist",
+                    "from_entity_id": artist_mbid,
+                    "from_entity_name": artist_name,
+                    "to_entity_type": "artist",
+                    "to_entity_id": artist.get("id"),
+                    "to_entity_name": artist.get("name"),
+                    "attributes": _relation_attributes(rel),
+                }
+            )
+    return relations
+
+
+def collect_relations(db_path: str = DEFAULT_DB_PATH) -> None:
+    """DB의 모든 트랙에 대해 MusicBrainz 협업/레이블/샘플/영향 관계를 조회해 적재한다."""
+    conn = connect(db_path)
+    rows = conn.execute("SELECT id, artist, title FROM tracks").fetchall()
+    if not rows:
+        print("DB에 트랙이 없음. 먼저 analyze를 실행할 것", file=sys.stderr)
+        return
+
+    for i, (track_id, artist, title) in enumerate(rows, start=1):
+        print(f"[{i}/{len(rows)}] 관계 조회 중: {artist} - {title}")
+        if not artist:
+            print("    아티스트 정보 없음, 건너뜀", file=sys.stderr)
+            continue
+        try:
+            recording = musicbrainz.search_recording(artist, title)
+            if not recording:
+                print("    MusicBrainz에서 레코딩을 찾지 못함, 건너뜀", file=sys.stderr)
+                continue
+            mb_recording_id = recording["id"]
+            update_track_mbid(conn, track_id, mb_recording_id)
+
+            relations = _normalize_recording_relations(
+                mb_recording_id, artist, title, musicbrainz.get_recording_relations(mb_recording_id)
+            )
+
+            credits = recording.get("artist-credit") or []
+            if credits:
+                credit_artist = credits[0].get("artist") or {}
+                artist_mbid = credit_artist.get("id")
+                if artist_mbid:
+                    relations += _normalize_artist_relations(
+                        artist_mbid,
+                        credit_artist.get("name", artist),
+                        musicbrainz.get_artist_relations(artist_mbid),
+                    )
+
+            upsert_relations(conn, relations)
+            print(f"    관계 {len(relations)}개 저장")
+        except Exception as e:
+            print(f"    관계 조회 실패: {e}", file=sys.stderr)
+    print(f"완료: {len(rows)}곡의 관계를 {db_path}에 저장함")
+
+
 def _resolve_seed_track_id(conn, query: str) -> int | None:
     """`query`를 track id로 우선 해석하고, 숫자가 아니면 artist/title 부분일치로 찾는다."""
     if query.isdigit():
@@ -223,6 +363,11 @@ def main() -> None:
     enrich_parser = subparsers.add_parser("enrich", help="DB의 트랙에 Last.fm/MusicBrainz/Discogs 태그 적재")
     enrich_parser.add_argument("--db", default=DEFAULT_DB_PATH)
 
+    collect_relations_parser = subparsers.add_parser(
+        "collect-relations", help="DB의 트랙에 MusicBrainz 협업/레이블/샘플/영향 관계 적재"
+    )
+    collect_relations_parser.add_argument("--db", default=DEFAULT_DB_PATH)
+
     similar_parser = subparsers.add_parser("similar", help="태그/오디오/키 가중합 기반 유사곡 탐색")
     similar_parser.add_argument("seed", help="시드 트랙의 id 또는 아티스트/제목 일부")
     similar_parser.add_argument("--top", type=int, default=5, dest="top_n")
@@ -254,6 +399,8 @@ def main() -> None:
         analyze_directory(args.directory, args.db)
     elif args.command == "enrich":
         enrich_tracks(args.db)
+    elif args.command == "collect-relations":
+        collect_relations(args.db)
     elif args.command == "similar":
         similar_tracks(
             args.seed,
