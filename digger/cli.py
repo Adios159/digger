@@ -10,6 +10,7 @@ from . import crosswalk
 from .analysis import analyze_track
 from .db import connect, upsert_track, upsert_track_tags
 from .metadata import discogs, lastfm, musicbrainz
+from .similarity import find_similar
 
 AUDIO_EXTENSIONS = {".flac", ".mp3", ".wav"}
 DEFAULT_DB_PATH = "digger.db"
@@ -118,6 +119,57 @@ def enrich_tracks(db_path: str = DEFAULT_DB_PATH) -> None:
     print(f"완료: {len(rows)}곡의 태그를 {db_path}에 저장함")
 
 
+def _resolve_seed_track_id(conn, query: str) -> int | None:
+    """`query`를 track id로 우선 해석하고, 숫자가 아니면 artist/title 부분일치로 찾는다."""
+    if query.isdigit():
+        row = conn.execute("SELECT id FROM tracks WHERE id = ?", (int(query),)).fetchone()
+        if row:
+            return row[0]
+        print(f"id={query}인 트랙이 없음", file=sys.stderr)
+        return None
+
+    rows = conn.execute(
+        "SELECT id, artist, title FROM tracks WHERE artist LIKE ? OR title LIKE ?",
+        (f"%{query}%", f"%{query}%"),
+    ).fetchall()
+    if not rows:
+        print(f"'{query}'와 일치하는 트랙이 없음", file=sys.stderr)
+        return None
+    if len(rows) > 1:
+        print(f"'{query}'와 일치하는 트랙이 여러 개임, 더 구체적으로 입력할 것:", file=sys.stderr)
+        for track_id, artist, title in rows:
+            print(f"  id={track_id}: {artist} - {title}", file=sys.stderr)
+        return None
+    return rows[0][0]
+
+
+def similar_tracks(seed: str, top_n: int = 5, db_path: str = DEFAULT_DB_PATH) -> None:
+    """코사인 유사도 기준으로 시드 트랙과 가까운 트랙을 찾아 출력한다."""
+    conn = connect(db_path)
+    seed_track_id = _resolve_seed_track_id(conn, seed)
+    if seed_track_id is None:
+        return
+
+    seed_artist, seed_title = conn.execute(
+        "SELECT artist, title FROM tracks WHERE id = ?", (seed_track_id,)
+    ).fetchone()
+    print(f"시드 트랙: {seed_artist} - {seed_title} (id={seed_track_id})")
+
+    try:
+        results = find_similar(conn, seed_track_id, top_n=top_n)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return
+
+    if not results:
+        print("비교할 다른 트랙이 없음", file=sys.stderr)
+        return
+
+    for rank, r in enumerate(results, start=1):
+        reason = ", ".join(r.top_features) if r.top_features else "공통 특성 없음"
+        print(f"{rank}. {r.artist} - {r.title} (유사도={r.similarity:.3f}) — {reason}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="digger")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -129,12 +181,19 @@ def main() -> None:
     enrich_parser = subparsers.add_parser("enrich", help="DB의 트랙에 Last.fm/MusicBrainz/Discogs 태그 적재")
     enrich_parser.add_argument("--db", default=DEFAULT_DB_PATH)
 
+    similar_parser = subparsers.add_parser("similar", help="코사인 유사도 기반 유사곡 탐색")
+    similar_parser.add_argument("seed", help="시드 트랙의 id 또는 아티스트/제목 일부")
+    similar_parser.add_argument("--top", type=int, default=5, dest="top_n")
+    similar_parser.add_argument("--db", default=DEFAULT_DB_PATH)
+
     args = parser.parse_args()
 
     if args.command == "analyze":
         analyze_directory(args.directory, args.db)
     elif args.command == "enrich":
         enrich_tracks(args.db)
+    elif args.command == "similar":
+        similar_tracks(args.seed, args.top_n, args.db)
 
 
 if __name__ == "__main__":
