@@ -30,6 +30,7 @@ env/
 # 환경 변수 / 시크릿
 .env
 .env.*
+!.env.example
 
 # OS / 에디터
 .DS_Store

@@ -1,2 +1,4 @@
 essentia
 mutagen
+requests
+python-dotenv
