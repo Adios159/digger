@@ -22,9 +22,6 @@ from .graph import dig_relations
 from .metadata import discogs, lastfm, musicbrainz, spotify
 from .relations import CATEGORIES, COLLAB_KEYWORDS, INFLUENCE_KEYWORDS, SAMPLE_KEYWORDS
 from .similarity import (
-    DEFAULT_AUDIO_WEIGHT,
-    DEFAULT_KEY_WEIGHT,
-    DEFAULT_TAG_WEIGHT,
     DEFAULT_ZONE_HIGH,
     DEFAULT_ZONE_LOW,
     find_digging_zone,
@@ -416,16 +413,13 @@ def similar_tracks(
     seed: str,
     top_n: int = 5,
     db_path: str = DEFAULT_DB_PATH,
-    tag_weight: float = DEFAULT_TAG_WEIGHT,
-    audio_weight: float = DEFAULT_AUDIO_WEIGHT,
-    key_weight: float = DEFAULT_KEY_WEIGHT,
     dig: bool = False,
     zone_low: float = DEFAULT_ZONE_LOW,
     zone_high: float = DEFAULT_ZONE_HIGH,
     boredom_weight: float = 0.0,
     exclude_tired_above: float | None = None,
 ) -> None:
-    """태그/오디오/키 가중합 유사도 기준으로 시드 트랙과 가까운 트랙을 찾아 출력한다.
+    """장르 태그 유사도 기준으로 시드 트랙과 가까운 트랙을 찾아 출력한다.
 
     dig=True면 최근접 이웃 대신 [zone_low, zone_high] 구간의 "디깅 존" 후보를 찾는다.
     boredom_weight > 0이면 질림 스코어가 높은 후보의 순위를 낮추고,
@@ -452,9 +446,6 @@ def similar_tracks(
                 top_n=top_n,
                 zone_low=zone_low,
                 zone_high=zone_high,
-                tag_weight=tag_weight,
-                audio_weight=audio_weight,
-                key_weight=key_weight,
                 boredom_scores=boredom_scores,
                 boredom_weight=boredom_weight,
                 exclude_tired_above=exclude_tired_above,
@@ -464,9 +455,6 @@ def similar_tracks(
                 conn,
                 seed_track_id,
                 top_n=top_n,
-                tag_weight=tag_weight,
-                audio_weight=audio_weight,
-                key_weight=key_weight,
                 boredom_scores=boredom_scores,
                 boredom_weight=boredom_weight,
                 exclude_tired_above=exclude_tired_above,
@@ -551,19 +539,10 @@ def main() -> None:
     )
     collect_relations_parser.add_argument("--db", default=DEFAULT_DB_PATH)
 
-    similar_parser = subparsers.add_parser("similar", help="태그/오디오/키 가중합 기반 유사곡 탐색")
+    similar_parser = subparsers.add_parser("similar", help="장르 태그 유사도 기반 유사곡 탐색")
     similar_parser.add_argument("seed", help="시드 트랙의 id 또는 아티스트/제목 일부")
     similar_parser.add_argument("--top", type=int, default=5, dest="top_n")
     similar_parser.add_argument("--db", default=DEFAULT_DB_PATH)
-    similar_parser.add_argument(
-        "--tag-weight", type=float, default=DEFAULT_TAG_WEIGHT, help=f"장르/태그 가중치 (기본 {DEFAULT_TAG_WEIGHT})"
-    )
-    similar_parser.add_argument(
-        "--audio-weight", type=float, default=DEFAULT_AUDIO_WEIGHT, help=f"bpm/energy 가중치 (기본 {DEFAULT_AUDIO_WEIGHT})"
-    )
-    similar_parser.add_argument(
-        "--key-weight", type=float, default=DEFAULT_KEY_WEIGHT, help=f"화성 키 가중치 (기본 {DEFAULT_KEY_WEIGHT})"
-    )
     similar_parser.add_argument(
         "--dig",
         action="store_true",
@@ -626,9 +605,6 @@ def main() -> None:
             args.seed,
             args.top_n,
             args.db,
-            args.tag_weight,
-            args.audio_weight,
-            args.key_weight,
             args.dig,
             args.zone_low,
             args.zone_high,
