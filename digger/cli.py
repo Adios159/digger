@@ -224,8 +224,60 @@ def _normalize_artist_relations(artist_mbid: str, artist_name: str, raw_relation
     return relations
 
 
+def _musicbrainz_relations(conn, track_id: int, artist: str, title: str) -> list[dict]:
+    """레코딩을 찾아 mbid를 저장하고, 협업(프로듀서·작곡가·엔지니어)·샘플·레이블·영향 관계를 조회한다."""
+    recording = musicbrainz.search_recording(artist, title)
+    if not recording:
+        print("    MusicBrainz에서 레코딩을 찾지 못함, 건너뜀", file=sys.stderr)
+        return []
+    mb_recording_id = recording["id"]
+    update_track_mbid(conn, track_id, mb_recording_id)
+
+    relations = _normalize_recording_relations(
+        mb_recording_id, artist, title, musicbrainz.get_recording_relations(mb_recording_id)
+    )
+
+    credits = recording.get("artist-credit") or []
+    if credits:
+        credit_artist = credits[0].get("artist") or {}
+        artist_mbid = credit_artist.get("id")
+        if artist_mbid:
+            relations += _normalize_artist_relations(
+                artist_mbid,
+                credit_artist.get("name", artist),
+                musicbrainz.get_artist_relations(artist_mbid),
+            )
+    return relations
+
+
+def _discogs_label_relations(track_id: int, artist: str, title: str) -> list[dict]:
+    """Discogs 릴리즈 검색 결과의 label 필드에서 소속 레이블 관계를 뽑는다.
+
+    "Not On Label(...)"은 Discogs가 자체발매/레이블 없음을 표기하는 관례적 문자열이라
+    관계로 남기지 않고 정직하게 공백 처리한다.
+    """
+    release = discogs.search_release(artist, title)
+    if not release:
+        return []
+    return [
+        {
+            "source": "discogs",
+            "relation_type": "released_on_label",
+            "from_entity_type": "track",
+            "from_entity_id": str(track_id),
+            "from_entity_name": f"{artist} - {title}",
+            "to_entity_type": "label",
+            "to_entity_id": None,
+            "to_entity_name": label_name,
+            "attributes": [],
+        }
+        for label_name in release.get("label", [])
+        if label_name and not label_name.lower().startswith("not on label")
+    ]
+
+
 def collect_relations(db_path: str = DEFAULT_DB_PATH) -> None:
-    """DB의 모든 트랙에 대해 MusicBrainz 협업/레이블/샘플/영향 관계를 조회해 적재한다."""
+    """DB의 모든 트랙에 대해 MusicBrainz 협업/레이블/샘플/영향 관계 + Discogs 레이블 관계를 적재한다."""
     conn = connect(db_path)
     rows = conn.execute("SELECT id, artist, title FROM tracks").fetchall()
     if not rows:
@@ -237,33 +289,23 @@ def collect_relations(db_path: str = DEFAULT_DB_PATH) -> None:
         if not artist:
             print("    아티스트 정보 없음, 건너뜀", file=sys.stderr)
             continue
+
+        relations: list[dict] = []
         try:
-            recording = musicbrainz.search_recording(artist, title)
-            if not recording:
-                print("    MusicBrainz에서 레코딩을 찾지 못함, 건너뜀", file=sys.stderr)
-                continue
-            mb_recording_id = recording["id"]
-            update_track_mbid(conn, track_id, mb_recording_id)
-
-            relations = _normalize_recording_relations(
-                mb_recording_id, artist, title, musicbrainz.get_recording_relations(mb_recording_id)
-            )
-
-            credits = recording.get("artist-credit") or []
-            if credits:
-                credit_artist = credits[0].get("artist") or {}
-                artist_mbid = credit_artist.get("id")
-                if artist_mbid:
-                    relations += _normalize_artist_relations(
-                        artist_mbid,
-                        credit_artist.get("name", artist),
-                        musicbrainz.get_artist_relations(artist_mbid),
-                    )
-
-            upsert_relations(conn, relations)
-            print(f"    관계 {len(relations)}개 저장")
+            fetched = _musicbrainz_relations(conn, track_id, artist, title)
+            relations += fetched
+            print(f"    musicbrainz: {len(fetched)}개 관계")
         except Exception as e:
-            print(f"    관계 조회 실패: {e}", file=sys.stderr)
+            print(f"    musicbrainz 조회 실패: {e}", file=sys.stderr)
+
+        try:
+            fetched = _discogs_label_relations(track_id, artist, title)
+            relations += fetched
+            print(f"    discogs: {len(fetched)}개 관계")
+        except Exception as e:
+            print(f"    discogs 조회 실패: {e}", file=sys.stderr)
+
+        upsert_relations(conn, relations)
     print(f"완료: {len(rows)}곡의 관계를 {db_path}에 저장함")
 
 
