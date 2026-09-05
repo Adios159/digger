@@ -8,9 +8,18 @@ from pathlib import Path
 
 from . import crosswalk
 from .analysis import analyze_track
-from .db import connect, update_track_mbid, upsert_relations, upsert_track, upsert_track_tags
+from .boredom import compute_boredom_scores
+from .db import (
+    connect,
+    replace_top_tracks,
+    update_track_mbid,
+    upsert_listening_history,
+    upsert_relations,
+    upsert_track,
+    upsert_track_tags,
+)
 from .graph import dig_relations
-from .metadata import discogs, lastfm, musicbrainz
+from .metadata import discogs, lastfm, musicbrainz, spotify
 from .relations import CATEGORIES, COLLAB_KEYWORDS, INFLUENCE_KEYWORDS, SAMPLE_KEYWORDS
 from .similarity import (
     DEFAULT_AUDIO_WEIGHT,
@@ -304,6 +313,81 @@ def collect_relations(db_path: str = DEFAULT_DB_PATH) -> None:
     print(f"완료: {len(rows)}곡의 관계를 {db_path}에 저장함")
 
 
+SPOTIFY_TOP_TRACK_RANGES = ["short_term", "medium_term", "long_term"]
+
+
+def _match_local_track(conn, artist: str, title: str) -> int | None:
+    """아티스트+제목 완전일치(대소문자 무시)로 로컬 트랙을 찾는다.
+
+    모호하게 여러 개가 걸리거나 하나도 없으면 억지로 추측하지 않고 None으로 남긴다.
+    """
+    rows = conn.execute(
+        "SELECT id FROM tracks WHERE LOWER(artist) = LOWER(?) AND LOWER(title) = LOWER(?)",
+        (artist, title),
+    ).fetchall()
+    return rows[0][0] if len(rows) == 1 else None
+
+
+def sync_listening_history(db_path: str = DEFAULT_DB_PATH) -> None:
+    """Spotify 최근 재생 + 상위 청취곡(short/medium/long_term)을 동기화한다."""
+    conn = connect(db_path)
+
+    print("최근 재생 이력 조회 중...")
+    recently_played = spotify.get_recently_played()
+    history_rows = []
+    for item in recently_played:
+        track = item.get("track") or {}
+        artist = ", ".join(a["name"] for a in track.get("artists", []))
+        title = track.get("name")
+        history_rows.append(
+            {
+                "spotify_track_id": track.get("id"),
+                "artist": artist,
+                "title": title,
+                "played_at": item["played_at"],
+                "track_id": _match_local_track(conn, artist, title) if artist and title else None,
+            }
+        )
+    upsert_listening_history(conn, history_rows)
+    print(f"    {len(history_rows)}건 저장")
+
+    for time_range in SPOTIFY_TOP_TRACK_RANGES:
+        print(f"상위 청취곡({time_range}) 조회 중...")
+        top_tracks = spotify.get_top_tracks(time_range=time_range)
+        top_rows = []
+        for rank, track in enumerate(top_tracks, start=1):
+            artist = ", ".join(a["name"] for a in track.get("artists", []))
+            title = track.get("name")
+            top_rows.append(
+                {
+                    "spotify_track_id": track.get("id"),
+                    "artist": artist,
+                    "title": title,
+                    "rank": rank,
+                    "track_id": _match_local_track(conn, artist, title) if artist and title else None,
+                }
+            )
+        replace_top_tracks(conn, time_range, top_rows)
+        print(f"    {len(top_rows)}건 저장")
+
+    print(f"완료: 청취 이력을 {db_path}에 저장함")
+
+
+def boredom_ranking(top_n: int = 10, db_path: str = DEFAULT_DB_PATH) -> None:
+    """청취 이력 기반 질림 스코어를 계산해 높은 순으로 출력한다."""
+    conn = connect(db_path)
+    scores = compute_boredom_scores(conn)
+    if not scores:
+        print("청취 이력이 없음. 먼저 sync-listening을 실행할 것", file=sys.stderr)
+        return
+
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+    for rank, (track_id, score) in enumerate(ranked, start=1):
+        row = conn.execute("SELECT artist, title FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        artist, title = row if row else ("?", "?")
+        print(f"{rank}. {artist} - {title} (질림 스코어={score:.2f})")
+
+
 def _resolve_seed_track_id(conn, query: str) -> int | None:
     """`query`를 track id로 우선 해석하고, 숫자가 아니면 artist/title 부분일치로 찾는다."""
     if query.isdigit():
@@ -338,10 +422,14 @@ def similar_tracks(
     dig: bool = False,
     zone_low: float = DEFAULT_ZONE_LOW,
     zone_high: float = DEFAULT_ZONE_HIGH,
+    boredom_weight: float = 0.0,
+    exclude_tired_above: float | None = None,
 ) -> None:
     """태그/오디오/키 가중합 유사도 기준으로 시드 트랙과 가까운 트랙을 찾아 출력한다.
 
     dig=True면 최근접 이웃 대신 [zone_low, zone_high] 구간의 "디깅 존" 후보를 찾는다.
+    boredom_weight > 0이면 질림 스코어가 높은 후보의 순위를 낮추고,
+    exclude_tired_above가 주어지면 그 값을 넘는 후보는 아예 제외한다.
     """
     conn = connect(db_path)
     seed_track_id = _resolve_seed_track_id(conn, seed)
@@ -352,6 +440,8 @@ def similar_tracks(
         "SELECT artist, title FROM tracks WHERE id = ?", (seed_track_id,)
     ).fetchone()
     print(f"시드 트랙: {seed_artist} - {seed_title} (id={seed_track_id})")
+
+    boredom_scores = compute_boredom_scores(conn) if (boredom_weight > 0 or exclude_tired_above is not None) else None
 
     try:
         if dig:
@@ -365,6 +455,9 @@ def similar_tracks(
                 tag_weight=tag_weight,
                 audio_weight=audio_weight,
                 key_weight=key_weight,
+                boredom_scores=boredom_scores,
+                boredom_weight=boredom_weight,
+                exclude_tired_above=exclude_tired_above,
             )
         else:
             results = find_similar(
@@ -374,6 +467,9 @@ def similar_tracks(
                 tag_weight=tag_weight,
                 audio_weight=audio_weight,
                 key_weight=key_weight,
+                boredom_scores=boredom_scores,
+                boredom_weight=boredom_weight,
+                exclude_tired_above=exclude_tired_above,
             )
     except ValueError as e:
         print(str(e), file=sys.stderr)
@@ -386,7 +482,8 @@ def similar_tracks(
 
     for rank, r in enumerate(results, start=1):
         reason = ", ".join(r.top_features) if r.top_features else "공통 특성 없음"
-        print(f"{rank}. {r.artist} - {r.title} (유사도={r.similarity:.3f}) — {reason}")
+        boredom_note = f", 질림={r.boredom_score:.2f}" if boredom_scores is not None else ""
+        print(f"{rank}. {r.artist} - {r.title} (유사도={r.similarity:.3f}{boredom_note}) — {reason}")
 
 
 def dig_relations_command(
@@ -395,8 +492,13 @@ def dig_relations_command(
     top_n: int = 10,
     db_path: str = DEFAULT_DB_PATH,
     include_known: bool = False,
+    exclude_tired_above: float | None = None,
 ) -> None:
-    """시드 트랙에서 관계(협업/레이블/샘플/영향) 축을 따라가 발견 후보를 찾아 출력한다."""
+    """시드 트랙에서 관계(협업/레이블/샘플/영향) 축을 따라가 발견 후보를 찾아 출력한다.
+
+    exclude_tired_above가 주어지면, 이미 아는 곡/아티스트 중 질림 스코어가 그 값을
+    넘는 결과는 제외한다(include_known과 별개 — 알고 있어도 안 질렸으면 남는다).
+    """
     conn = connect(db_path)
     seed_track_id = _resolve_seed_track_id(conn, seed)
     if seed_track_id is None:
@@ -409,8 +511,19 @@ def dig_relations_command(
     if not mb_recording_id:
         print("주의: collect-relations를 먼저 실행하지 않은 트랙이라 결과가 없을 수 있음", file=sys.stderr)
 
+    boredom_scores = compute_boredom_scores(conn) if exclude_tired_above is not None else None
+
     results = dig_relations(
-        conn, seed_track_id, seed_artist, seed_title, mb_recording_id, category, top_n=top_n, include_known=include_known
+        conn,
+        seed_track_id,
+        seed_artist,
+        seed_title,
+        mb_recording_id,
+        category,
+        top_n=top_n,
+        include_known=include_known,
+        boredom_scores=boredom_scores,
+        exclude_tired_above=exclude_tired_above,
     )
     if not results:
         print("연결된 관계를 찾지 못함. collect-relations를 먼저 실행했는지 확인할 것", file=sys.stderr)
@@ -418,7 +531,8 @@ def dig_relations_command(
 
     for rank, r in enumerate(results, start=1):
         known_mark = " (이미 아는 곡/아티스트)" if r["already_known"] else ""
-        print(f"{rank}. {r['entity_name']}{known_mark} — {r['path']}")
+        boredom_note = f", 질림={r['boredom_score']:.2f}" if boredom_scores is not None else ""
+        print(f"{rank}. {r['entity_name']}{known_mark}{boredom_note} — {r['path']}")
 
 
 def main() -> None:
@@ -461,6 +575,24 @@ def main() -> None:
     similar_parser.add_argument(
         "--zone-high", type=float, default=DEFAULT_ZONE_HIGH, help=f"디깅 존 상한 (기본 {DEFAULT_ZONE_HIGH})"
     )
+    similar_parser.add_argument(
+        "--boredom-weight",
+        type=float,
+        default=0.0,
+        help="질림 스코어로 순위를 낮추는 비율(0~1). sync-listening으로 청취 이력을 먼저 동기화해야 의미 있음",
+    )
+    similar_parser.add_argument(
+        "--exclude-tired-above", type=float, default=None, help="이 질림 스코어를 넘는 후보는 아예 제외"
+    )
+
+    sync_listening_parser = subparsers.add_parser(
+        "sync-listening", help="Spotify 최근 재생/상위 청취곡 동기화(최초 실행 시 브라우저 인증)"
+    )
+    sync_listening_parser.add_argument("--db", default=DEFAULT_DB_PATH)
+
+    boredom_parser = subparsers.add_parser("boredom", help="청취 이력 기반 질림 스코어 랭킹 출력")
+    boredom_parser.add_argument("--top", type=int, default=10, dest="top_n")
+    boredom_parser.add_argument("--db", default=DEFAULT_DB_PATH)
 
     dig_relations_parser = subparsers.add_parser(
         "dig-relations", help="협업/레이블/샘플/영향 관계를 따라 아직 모르는 곡·아티스트 탐색"
@@ -473,6 +605,12 @@ def main() -> None:
     dig_relations_parser.add_argument("--db", default=DEFAULT_DB_PATH)
     dig_relations_parser.add_argument(
         "--include-known", action="store_true", help="이미 로컬 DB에 있는 곡/아티스트도 결과에 포함"
+    )
+    dig_relations_parser.add_argument(
+        "--exclude-tired-above",
+        type=float,
+        default=None,
+        help="이미 아는 곡/아티스트 중 이 질림 스코어를 넘는 결과는 제외 (--include-known과 독립적으로 적용)",
     )
 
     args = parser.parse_args()
@@ -494,9 +632,17 @@ def main() -> None:
             args.dig,
             args.zone_low,
             args.zone_high,
+            args.boredom_weight,
+            args.exclude_tired_above,
         )
+    elif args.command == "sync-listening":
+        sync_listening_history(args.db)
+    elif args.command == "boredom":
+        boredom_ranking(args.top_n, args.db)
     elif args.command == "dig-relations":
-        dig_relations_command(args.seed, args.category, args.top_n, args.db, args.include_known)
+        dig_relations_command(
+            args.seed, args.category, args.top_n, args.db, args.include_known, args.exclude_tired_above
+        )
 
 
 if __name__ == "__main__":
