@@ -35,6 +35,29 @@ CREATE TABLE IF NOT EXISTS track_tags (
     UNIQUE(track_id, source, tag_type, raw_tag)
 );
 
+CREATE TABLE IF NOT EXISTS listening_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    spotify_track_id TEXT NOT NULL,
+    artist TEXT,
+    title TEXT,
+    played_at TEXT NOT NULL,
+    track_id INTEGER REFERENCES tracks(id),
+    fetched_at TEXT NOT NULL,
+    UNIQUE(spotify_track_id, played_at)
+);
+
+CREATE TABLE IF NOT EXISTS top_tracks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    spotify_track_id TEXT NOT NULL,
+    artist TEXT,
+    title TEXT,
+    time_range TEXT NOT NULL,
+    rank INTEGER NOT NULL,
+    track_id INTEGER REFERENCES tracks(id),
+    fetched_at TEXT NOT NULL,
+    UNIQUE(spotify_track_id, time_range)
+);
+
 CREATE TABLE IF NOT EXISTS relations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT NOT NULL,
@@ -132,6 +155,71 @@ def upsert_track(conn: sqlite3.Connection, track: dict[str, Any]) -> None:
         "analyzed_at": datetime.now(timezone.utc).isoformat(),
     }
     conn.execute(_UPSERT_SQL, row)
+    conn.commit()
+
+
+_UPSERT_LISTENING_HISTORY_SQL = """
+INSERT INTO listening_history (spotify_track_id, artist, title, played_at, track_id, fetched_at)
+VALUES (:spotify_track_id, :artist, :title, :played_at, :track_id, :fetched_at)
+ON CONFLICT(spotify_track_id, played_at) DO UPDATE SET
+    track_id=excluded.track_id,
+    fetched_at=excluded.fetched_at;
+"""
+
+
+def upsert_listening_history(conn: sqlite3.Connection, items: list[dict[str, Any]]) -> None:
+    """최근 재생 이력을 저장한다(있으면 갱신).
+
+    각 항목은 spotify_track_id, artist, title, played_at을 필수로 갖고,
+    track_id(로컬 tracks 매칭 결과, 없으면 None)는 선택.
+    같은 곡을 반복 재생해도 played_at이 다르면 별도 이력으로 쌓인다.
+    """
+    fetched_at = datetime.now(timezone.utc).isoformat()
+    rows = [
+        {
+            "spotify_track_id": item["spotify_track_id"],
+            "artist": item.get("artist"),
+            "title": item.get("title"),
+            "played_at": item["played_at"],
+            "track_id": item.get("track_id"),
+            "fetched_at": fetched_at,
+        }
+        for item in items
+    ]
+    if not rows:
+        return
+    conn.executemany(_UPSERT_LISTENING_HISTORY_SQL, rows)
+    conn.commit()
+
+
+def replace_top_tracks(conn: sqlite3.Connection, time_range: str, items: list[dict[str, Any]]) -> None:
+    """`time_range`(short/medium/long_term) 상위 청취곡을 이번 조회 결과로 교체한다.
+
+    랭킹은 매 조회마다 통째로 바뀌는 스냅샷이라, 시계열 이력 대신 최신 상태만
+    유지하는 것이 "지금 뭘 많이 듣는가"를 정직하게 반영한다.
+    """
+    fetched_at = datetime.now(timezone.utc).isoformat()
+    rows = [
+        {
+            "spotify_track_id": item["spotify_track_id"],
+            "artist": item.get("artist"),
+            "title": item.get("title"),
+            "time_range": time_range,
+            "rank": item["rank"],
+            "track_id": item.get("track_id"),
+            "fetched_at": fetched_at,
+        }
+        for item in items
+    ]
+    conn.execute("DELETE FROM top_tracks WHERE time_range = ?", (time_range,))
+    if rows:
+        conn.executemany(
+            """
+            INSERT INTO top_tracks (spotify_track_id, artist, title, time_range, rank, track_id, fetched_at)
+            VALUES (:spotify_track_id, :artist, :title, :time_range, :rank, :track_id, :fetched_at)
+            """,
+            rows,
+        )
     conn.commit()
 
 
