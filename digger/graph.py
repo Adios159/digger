@@ -52,6 +52,15 @@ def _is_known_locally(conn: sqlite3.Connection, name: str) -> bool:
     return row is not None
 
 
+def _local_track_id_for_name(conn: sqlite3.Connection, name: str) -> int | None:
+    """이름이 가리키는 로컬 트랙 id를 찾는다(질림 스코어 조회용). 모호하면 첫 결과를 씀."""
+    row = conn.execute(
+        "SELECT id FROM tracks WHERE artist LIKE ? OR title LIKE ? LIMIT 1",
+        (f"%{name}%", f"%{name}%"),
+    ).fetchone()
+    return row[0] if row else None
+
+
 def _dig_collab(conn: sqlite3.Connection, artist: str, title: str, to_id: str, to_name: str) -> list[dict]:
     """협업자(프로듀서/작곡가/엔지니어 등)가 참여한 다른 레코딩을 찾는다."""
     results = []
@@ -122,8 +131,15 @@ def dig_relations(
     category: str,
     top_n: int = 10,
     include_known: bool = False,
+    boredom_scores: dict[int, float] | None = None,
+    exclude_tired_above: float | None = None,
 ) -> list[dict]:
-    """시드 곡에서 `category`(collab/label/samples/influence) 축으로 관계를 따라가 결과를 반환한다."""
+    """시드 곡에서 `category`(collab/label/samples/influence) 축으로 관계를 따라가 결과를 반환한다.
+
+    boredom_scores가 주어지면 각 결과의 entity_name을 로컬 트랙과 매칭해 질림 스코어를
+    붙이고, exclude_tired_above를 넘는 결과는 제외한다 — "이미 아는 곡"이어도 질리지
+    않았으면 include_known으로 남겨둘 수 있게, 두 필터를 독립적으로 적용한다.
+    """
     if category not in CATEGORIES:
         raise ValueError(f"category는 {CATEGORIES} 중 하나여야 함: {category!r}")
 
@@ -165,6 +181,12 @@ def dig_relations(
                 }
             )
 
+    for r in results:
+        track_id = _local_track_id_for_name(conn, r["entity_name"]) if boredom_scores else None
+        r["boredom_score"] = boredom_scores.get(track_id, 0.0) if track_id is not None and boredom_scores else 0.0
+
     if not include_known:
         results = [r for r in results if not r["already_known"]]
+    if exclude_tired_above is not None:
+        results = [r for r in results if r["boredom_score"] <= exclude_tired_above]
     return results[:top_n]
