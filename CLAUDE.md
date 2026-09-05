@@ -2,17 +2,36 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> 참고: 현재 이 저장소에는 소스 코드가 없고(git 저장소도 아직 초기화되지 않음), 아래의 사용자 작업 지침만 존재함. 따라서 빌드/린트/테스트 명령이나 아키텍처 설명은 아직 작성할 수 없음. 코드가 추가되면 이 문서에 해당 내용을 보강할 것.
+## 프로젝트 개요
 
-# 필수 지침사항 
-- 한국어로 답변 할 것.
-- 반말로 답변 할 것.
-- 작업을 수행 하기 전 먼저 계획을 세울 것. 
-- 계획의 기본 단위는 커밋 단위로 계획을 세울 것. 
-- 세 개 이상의 커밋이 소요되는 작업에는 develop브랜치에 파생된 새 브랜치를 만들고 작업 할 것.
-- 1개에서 2개의 커밋이 소요되는 작업은 새로운 브랜치를 만드는 것 대신 기존의 develop 브랜치에서 바로 작업할 것.
-- main 브랜치에는 절대로 직접 커밋하지 말것.
-- 사용자가 계획을 세우라고 요청 하기 전 알아서 계획을 세울 것.
-- 세운 계획은 시행 전 무조건 사용자에게 검사를 받을 것.
-- 한 커밋이 끝날 때 마다 git에 커밋과 푸시를 진행 할 것
-- 커밋 메시지는 한국어 작성 할 것
+내가 실제로 좋아하는 곡의 음향적·맥락적 특성을 분석해 아직 모르는 인접곡/아티스트를 찾아주는 개인용 음악 디깅 도구. 현재는 Python CLI 프로토타입 단계이며, 검증되면 FastAPI 기반 정식 백엔드로 확장할 계획이다 (자세한 배경은 `AI_음악_디깅_앱_기획서 (1).md` 참고).
+
+## 실행 환경 / 명령어
+
+- Python 3.12, 의존성은 `requirements.txt`로 관리 (`pip install -r requirements.txt`). 별도 lint/test 설정은 없음.
+- 환경변수는 `.env`에서 로드 (`digger/config.py`, `python-dotenv`). `.env.example`을 복사해 `LASTFM_API_KEY`, `DISCOGS_TOKEN`, `MB_CONTACT`를 채워야 메타데이터 조회가 동작함.
+- CLI 진입점: `python -m digger.cli`
+  - `analyze <디렉토리> [--db digger.db]`: 디렉토리 내 오디오 파일(.flac/.mp3/.wav)을 Essentia로 분석해 `tracks` 테이블에 upsert.
+  - `enrich [--db digger.db]`: DB에 있는 모든 트랙에 대해 Discogs → Last.fm → MusicBrainz 순으로 태그를 조회해 `track_tags`에 upsert. 소스 하나가 실패해도 나머지는 계속 진행됨(개별 try/except).
+- DB 파일(`digger.db`)과 원본 음원(`music/`)은 `.gitignore`에 포함되어 커밋 대상이 아님.
+
+## 아키텍처
+
+두 단계 파이프라인: **분석(analyze) → 보강(enrich)**, 둘 다 같은 SQLite DB(`digger.db`)를 공유한다.
+
+- `digger/analysis.py`: `analyze_track()`이 파일 태그(mutagen, 없으면 파일명 `아티스트 - 앨범 - 트랙제목`에서 유추)와 Essentia `MusicExtractor` 음향 특성(bpm/key/energy 등)을 합쳐 dict로 반환. 원본 `raw_features` 전체도 함께 저장해 나중에 필요한 특성을 다시 뽑을 수 있게 함.
+- `digger/db.py`: SQLite 스키마와 upsert 함수. `tracks`(음향 특성)와 `track_tags`(외부 소스 태그, `UNIQUE(track_id, source, tag_type, raw_tag)`로 소스별 중복 방지)로 분리되어 있음. 스키마 마이그레이션 없이 `CREATE TABLE IF NOT EXISTS`로만 관리하므로 컬럼 변경 시 주의.
+- `digger/metadata/`: 외부 메타데이터 소스별 클라이언트 (`discogs.py`, `lastfm.py`, `musicbrainz.py`). 각각 자체 rate limit을 모듈 전역 `_last_request_time`으로 구현하고 있음 (Discogs 1.1초, MusicBrainz 1초 — 정책상 필수). 새 소스를 추가할 때도 이 패턴을 따를 것.
+  - Discogs는 릴리즈 검색 결과에 공식 `genre`/`style` 필드가 바로 포함되어 있어 크로스워크 없이 canonical 태그로 사용 가능. `artist`/`track` 필드로 엄격 검색하면 컴필레이션(릴리즈 아티스트가 "Various")을 놓치므로 통합 텍스트 쿼리(`q`)를 사용함.
+  - Last.fm/MusicBrainz는 자유형(folksonomy) 태그라 `digger/crosswalk.py` + `digger/data/tag_crosswalk.yaml`로 canonical style에 정규화. 매핑이 없는 태그는 `canonical_style=NULL`로 정직하게 남겨두고, `enrich` 실행 결과를 보며 점진적으로 YAML을 채워나가는 방식(전체를 미리 큐레이션하지 않음).
+- `digger/cli.py`: 위 모듈들을 엮는 argparse 기반 서브커맨드. 새 메타데이터 소스를 추가하려면 `_xxx_tags()` 헬퍼를 만들고 `enrich_tracks()`의 `(label, fetch)` 튜플 목록에 추가하면 됨.
+
+## 협업 워크플로 (필수 준수)
+
+- 한국어로, 반말로 답변할 것.
+- 작업을 수행하기 전 먼저 계획을 세우고, 사용자가 요청하지 않아도 알아서 계획을 세울 것.
+- 계획의 기본 단위는 커밋 단위로 세울 것. 계획은 시행 전 무조건 사용자에게 검사를 받을 것.
+- 세 개 이상의 커밋이 소요되는 작업 → `develop`에서 새 브랜치를 파서 작업.
+- 1~2개 커밋이면 새 브랜치 없이 기존 `develop`에서 바로 작업.
+- `main` 브랜치에는 절대 직접 커밋하지 말 것.
+- 커밋 하나가 끝날 때마다 git commit + push까지 진행할 것. 커밋 메시지는 한국어로 작성.
