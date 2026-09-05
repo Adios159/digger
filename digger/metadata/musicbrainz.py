@@ -52,3 +52,15 @@ def get_tags(recording_mbid: str) -> list[dict[str, Any]]:
     """레코딩의 folksonomy 태그(name, count)를 조회한다."""
     data = _request(f"recording/{recording_mbid}", {"inc": "tags"})
     return data.get("tags", [])
+
+
+def get_recording_relations(recording_mbid: str) -> list[dict[str, Any]]:
+    """레코딩의 관계(프로듀서·작곡가·엔지니어 등 아티스트 관계, 샘플 등 레코딩 관계)를 조회한다."""
+    data = _request(f"recording/{recording_mbid}", {"inc": "artist-rels+recording-rels"})
+    return data.get("relations", [])
+
+
+def get_artist_relations(artist_mbid: str) -> list[dict[str, Any]]:
+    """아티스트의 관계(레이블 소속, 다른 아티스트와의 영향 관계 등)를 조회한다."""
+    data = _request(f"artist/{artist_mbid}", {"inc": "label-rels+artist-rels"})
+    return data.get("relations", [])
