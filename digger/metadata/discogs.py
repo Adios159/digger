@@ -36,10 +36,14 @@ def _request(path: str, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def search_release(artist: str, title: str) -> dict[str, Any] | None:
-    """아티스트+트랙 제목으로 검색해 최상위 결과(genre/style 포함)를 반환한다."""
+    """아티스트+트랙 제목으로 검색해 최상위 결과(genre/style 포함)를 반환한다.
+
+    `artist`/`track` 필드로 엄격 검색하면 컴필레이션 릴리즈(release 아티스트가
+    "Various"로 등록된 경우)를 놓치므로, 통합 텍스트 쿼리(`q`)로 느슨하게 검색한다.
+    """
     data = _request(
         "database/search",
-        {"artist": artist, "track": title, "type": "release"},
+        {"q": f"{artist} {title}", "type": "release"},
     )
     results = data.get("results", [])
     return results[0] if results else None
