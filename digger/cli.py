@@ -10,7 +10,7 @@ from . import crosswalk
 from .analysis import analyze_track
 from .db import connect, upsert_track, upsert_track_tags
 from .metadata import discogs, lastfm, musicbrainz
-from .similarity import find_similar
+from .similarity import DEFAULT_AUDIO_WEIGHT, DEFAULT_KEY_WEIGHT, DEFAULT_TAG_WEIGHT, find_similar
 
 AUDIO_EXTENSIONS = {".flac", ".mp3", ".wav"}
 DEFAULT_DB_PATH = "digger.db"
@@ -143,8 +143,15 @@ def _resolve_seed_track_id(conn, query: str) -> int | None:
     return rows[0][0]
 
 
-def similar_tracks(seed: str, top_n: int = 5, db_path: str = DEFAULT_DB_PATH) -> None:
-    """코사인 유사도 기준으로 시드 트랙과 가까운 트랙을 찾아 출력한다."""
+def similar_tracks(
+    seed: str,
+    top_n: int = 5,
+    db_path: str = DEFAULT_DB_PATH,
+    tag_weight: float = DEFAULT_TAG_WEIGHT,
+    audio_weight: float = DEFAULT_AUDIO_WEIGHT,
+    key_weight: float = DEFAULT_KEY_WEIGHT,
+) -> None:
+    """태그/오디오/키 가중합 유사도 기준으로 시드 트랙과 가까운 트랙을 찾아 출력한다."""
     conn = connect(db_path)
     seed_track_id = _resolve_seed_track_id(conn, seed)
     if seed_track_id is None:
@@ -156,7 +163,14 @@ def similar_tracks(seed: str, top_n: int = 5, db_path: str = DEFAULT_DB_PATH) ->
     print(f"시드 트랙: {seed_artist} - {seed_title} (id={seed_track_id})")
 
     try:
-        results = find_similar(conn, seed_track_id, top_n=top_n)
+        results = find_similar(
+            conn,
+            seed_track_id,
+            top_n=top_n,
+            tag_weight=tag_weight,
+            audio_weight=audio_weight,
+            key_weight=key_weight,
+        )
     except ValueError as e:
         print(str(e), file=sys.stderr)
         return
@@ -181,10 +195,19 @@ def main() -> None:
     enrich_parser = subparsers.add_parser("enrich", help="DB의 트랙에 Last.fm/MusicBrainz/Discogs 태그 적재")
     enrich_parser.add_argument("--db", default=DEFAULT_DB_PATH)
 
-    similar_parser = subparsers.add_parser("similar", help="코사인 유사도 기반 유사곡 탐색")
+    similar_parser = subparsers.add_parser("similar", help="태그/오디오/키 가중합 기반 유사곡 탐색")
     similar_parser.add_argument("seed", help="시드 트랙의 id 또는 아티스트/제목 일부")
     similar_parser.add_argument("--top", type=int, default=5, dest="top_n")
     similar_parser.add_argument("--db", default=DEFAULT_DB_PATH)
+    similar_parser.add_argument(
+        "--tag-weight", type=float, default=DEFAULT_TAG_WEIGHT, help=f"장르/태그 가중치 (기본 {DEFAULT_TAG_WEIGHT})"
+    )
+    similar_parser.add_argument(
+        "--audio-weight", type=float, default=DEFAULT_AUDIO_WEIGHT, help=f"bpm/energy 가중치 (기본 {DEFAULT_AUDIO_WEIGHT})"
+    )
+    similar_parser.add_argument(
+        "--key-weight", type=float, default=DEFAULT_KEY_WEIGHT, help=f"화성 키 가중치 (기본 {DEFAULT_KEY_WEIGHT})"
+    )
 
     args = parser.parse_args()
 
@@ -193,7 +216,9 @@ def main() -> None:
     elif args.command == "enrich":
         enrich_tracks(args.db)
     elif args.command == "similar":
-        similar_tracks(args.seed, args.top_n, args.db)
+        similar_tracks(
+            args.seed, args.top_n, args.db, args.tag_weight, args.audio_weight, args.key_weight
+        )
 
 
 if __name__ == "__main__":
