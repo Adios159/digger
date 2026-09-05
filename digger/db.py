@@ -34,6 +34,22 @@ CREATE TABLE IF NOT EXISTS track_tags (
     fetched_at TEXT NOT NULL,
     UNIQUE(track_id, source, tag_type, raw_tag)
 );
+
+CREATE TABLE IF NOT EXISTS relations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    relation_type TEXT NOT NULL,
+    from_entity_type TEXT NOT NULL,
+    from_entity_id TEXT NOT NULL,
+    from_entity_name TEXT,
+    to_entity_type TEXT NOT NULL,
+    to_entity_id TEXT,
+    to_entity_name TEXT NOT NULL,
+    to_entity_key TEXT NOT NULL,
+    attributes TEXT,
+    fetched_at TEXT NOT NULL,
+    UNIQUE(source, relation_type, from_entity_type, from_entity_id, to_entity_type, to_entity_key)
+);
 """
 
 _UPSERT_SQL = """
@@ -56,8 +72,16 @@ ON CONFLICT(file_path) DO UPDATE SET
 def connect(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA)
+    _migrate(conn)
     conn.commit()
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """`CREATE TABLE IF NOT EXISTS`로는 반영되지 않는, 기존 테이블에 대한 컬럼 추가를 처리한다."""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(tracks)")}
+    if "mb_recording_id" not in columns:
+        conn.execute("ALTER TABLE tracks ADD COLUMN mb_recording_id TEXT")
 
 
 _UPSERT_TAG_SQL = """
@@ -108,4 +132,58 @@ def upsert_track(conn: sqlite3.Connection, track: dict[str, Any]) -> None:
         "analyzed_at": datetime.now(timezone.utc).isoformat(),
     }
     conn.execute(_UPSERT_SQL, row)
+    conn.commit()
+
+
+def update_track_mbid(conn: sqlite3.Connection, track_id: int, mb_recording_id: str) -> None:
+    """트랙의 MusicBrainz 레코딩 mbid를 저장한다(관계 조회 시 재사용)."""
+    conn.execute("UPDATE tracks SET mb_recording_id = ? WHERE id = ?", (mb_recording_id, track_id))
+    conn.commit()
+
+
+_UPSERT_RELATION_SQL = """
+INSERT INTO relations (
+    source, relation_type, from_entity_type, from_entity_id, from_entity_name,
+    to_entity_type, to_entity_id, to_entity_name, to_entity_key, attributes, fetched_at
+)
+VALUES (
+    :source, :relation_type, :from_entity_type, :from_entity_id, :from_entity_name,
+    :to_entity_type, :to_entity_id, :to_entity_name, :to_entity_key, :attributes, :fetched_at
+)
+ON CONFLICT(source, relation_type, from_entity_type, from_entity_id, to_entity_type, to_entity_key) DO UPDATE SET
+    from_entity_name=excluded.from_entity_name,
+    to_entity_name=excluded.to_entity_name,
+    attributes=excluded.attributes,
+    fetched_at=excluded.fetched_at;
+"""
+
+
+def upsert_relations(conn: sqlite3.Connection, relations: list[dict[str, Any]]) -> None:
+    """관계 그래프 엣지 목록을 저장한다(있으면 갱신).
+
+    각 항목은 source, relation_type, from_entity_type, from_entity_id, to_entity_type,
+    to_entity_name을 필수로 갖고, from_entity_name/to_entity_id/attributes는 선택.
+    to_entity_id가 없는 경우(예: MusicBrainz에 엔티티가 없는 대상) to_entity_name을 대신
+    dedup 키(to_entity_key)로 사용해, 이름만 아는 대상도 정직하게 공백 없이 저장한다.
+    """
+    fetched_at = datetime.now(timezone.utc).isoformat()
+    rows = [
+        {
+            "source": r["source"],
+            "relation_type": r["relation_type"],
+            "from_entity_type": r["from_entity_type"],
+            "from_entity_id": r["from_entity_id"],
+            "from_entity_name": r.get("from_entity_name"),
+            "to_entity_type": r["to_entity_type"],
+            "to_entity_id": r.get("to_entity_id"),
+            "to_entity_name": r["to_entity_name"],
+            "to_entity_key": r.get("to_entity_id") or r["to_entity_name"],
+            "attributes": json.dumps(r.get("attributes") or [], ensure_ascii=False),
+            "fetched_at": fetched_at,
+        }
+        for r in relations
+    ]
+    if not rows:
+        return
+    conn.executemany(_UPSERT_RELATION_SQL, rows)
     conn.commit()
