@@ -18,6 +18,8 @@ from .vectorize import build_feature_blocks
 DEFAULT_TAG_WEIGHT = 0.5
 DEFAULT_AUDIO_WEIGHT = 0.35
 DEFAULT_KEY_WEIGHT = 0.15
+DEFAULT_ZONE_LOW = 0.6
+DEFAULT_ZONE_HIGH = 0.8
 
 
 class SimilarTrack(NamedTuple):
@@ -80,15 +82,14 @@ def _top_contributing_features(
     return [name for _, name in contributions[:top_n]]
 
 
-def find_similar(
+def _rank_all(
     conn: sqlite3.Connection,
     seed_track_id: int,
-    top_n: int = 5,
-    tag_weight: float = DEFAULT_TAG_WEIGHT,
-    audio_weight: float = DEFAULT_AUDIO_WEIGHT,
-    key_weight: float = DEFAULT_KEY_WEIGHT,
+    tag_weight: float,
+    audio_weight: float,
+    key_weight: float,
 ) -> list[SimilarTrack]:
-    """시드 트랙과 가중합 유사도가 높은 순으로 다른 트랙을 랭킹한다."""
+    """시드 트랙 대비 다른 모든 트랙의 가중합 유사도를 계산해 내림차순으로 반환한다."""
     blocks = build_feature_blocks(conn)
     if seed_track_id not in blocks.tag_vectors:
         raise ValueError(f"트랙 id {seed_track_id}가 DB에 없음")
@@ -109,7 +110,7 @@ def find_similar(
     key_contributions = key_weight * key_sims * tag_sims
     scores = tag_weight * tag_sims + audio_weight * audio_sims + key_contributions
 
-    ranked_idx = np.argsort(scores)[::-1][:top_n]
+    ranked_idx = np.argsort(scores)[::-1]
 
     results = []
     for idx in ranked_idx:
@@ -120,3 +121,35 @@ def find_similar(
         )
         results.append(SimilarTrack(track_id, artist, title, float(scores[idx]), top_features))
     return results
+
+
+def find_similar(
+    conn: sqlite3.Connection,
+    seed_track_id: int,
+    top_n: int = 5,
+    tag_weight: float = DEFAULT_TAG_WEIGHT,
+    audio_weight: float = DEFAULT_AUDIO_WEIGHT,
+    key_weight: float = DEFAULT_KEY_WEIGHT,
+) -> list[SimilarTrack]:
+    """시드 트랙과 가중합 유사도가 높은 순으로 다른 트랙을 랭킹한다."""
+    return _rank_all(conn, seed_track_id, tag_weight, audio_weight, key_weight)[:top_n]
+
+
+def find_digging_zone(
+    conn: sqlite3.Connection,
+    seed_track_id: int,
+    top_n: int = 5,
+    zone_low: float = DEFAULT_ZONE_LOW,
+    zone_high: float = DEFAULT_ZONE_HIGH,
+    tag_weight: float = DEFAULT_TAG_WEIGHT,
+    audio_weight: float = DEFAULT_AUDIO_WEIGHT,
+    key_weight: float = DEFAULT_KEY_WEIGHT,
+) -> list[SimilarTrack]:
+    """가장 가까운 트랙 대신, 유사도가 [zone_low, zone_high] 구간인 "디깅 존" 트랙을 찾는다.
+
+    최근접 이웃만 계속 추천하면 이미 아는 것과 비슷한 곡만 나오는 필터버블
+    위험이 있어서(기획서 7-4), 일부러 "적당히 먼" 구간에서 후보를 뽑는다.
+    """
+    ranked = _rank_all(conn, seed_track_id, tag_weight, audio_weight, key_weight)
+    zone = [r for r in ranked if zone_low <= r.similarity <= zone_high]
+    return zone[:top_n]

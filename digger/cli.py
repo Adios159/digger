@@ -10,7 +10,15 @@ from . import crosswalk
 from .analysis import analyze_track
 from .db import connect, upsert_track, upsert_track_tags
 from .metadata import discogs, lastfm, musicbrainz
-from .similarity import DEFAULT_AUDIO_WEIGHT, DEFAULT_KEY_WEIGHT, DEFAULT_TAG_WEIGHT, find_similar
+from .similarity import (
+    DEFAULT_AUDIO_WEIGHT,
+    DEFAULT_KEY_WEIGHT,
+    DEFAULT_TAG_WEIGHT,
+    DEFAULT_ZONE_HIGH,
+    DEFAULT_ZONE_LOW,
+    find_digging_zone,
+    find_similar,
+)
 
 AUDIO_EXTENSIONS = {".flac", ".mp3", ".wav"}
 DEFAULT_DB_PATH = "digger.db"
@@ -150,8 +158,14 @@ def similar_tracks(
     tag_weight: float = DEFAULT_TAG_WEIGHT,
     audio_weight: float = DEFAULT_AUDIO_WEIGHT,
     key_weight: float = DEFAULT_KEY_WEIGHT,
+    dig: bool = False,
+    zone_low: float = DEFAULT_ZONE_LOW,
+    zone_high: float = DEFAULT_ZONE_HIGH,
 ) -> None:
-    """태그/오디오/키 가중합 유사도 기준으로 시드 트랙과 가까운 트랙을 찾아 출력한다."""
+    """태그/오디오/키 가중합 유사도 기준으로 시드 트랙과 가까운 트랙을 찾아 출력한다.
+
+    dig=True면 최근접 이웃 대신 [zone_low, zone_high] 구간의 "디깅 존" 후보를 찾는다.
+    """
     conn = connect(db_path)
     seed_track_id = _resolve_seed_track_id(conn, seed)
     if seed_track_id is None:
@@ -163,20 +177,34 @@ def similar_tracks(
     print(f"시드 트랙: {seed_artist} - {seed_title} (id={seed_track_id})")
 
     try:
-        results = find_similar(
-            conn,
-            seed_track_id,
-            top_n=top_n,
-            tag_weight=tag_weight,
-            audio_weight=audio_weight,
-            key_weight=key_weight,
-        )
+        if dig:
+            print(f"디깅 존({zone_low:.2f}~{zone_high:.2f}) 탐색 중...")
+            results = find_digging_zone(
+                conn,
+                seed_track_id,
+                top_n=top_n,
+                zone_low=zone_low,
+                zone_high=zone_high,
+                tag_weight=tag_weight,
+                audio_weight=audio_weight,
+                key_weight=key_weight,
+            )
+        else:
+            results = find_similar(
+                conn,
+                seed_track_id,
+                top_n=top_n,
+                tag_weight=tag_weight,
+                audio_weight=audio_weight,
+                key_weight=key_weight,
+            )
     except ValueError as e:
         print(str(e), file=sys.stderr)
         return
 
     if not results:
-        print("비교할 다른 트랙이 없음", file=sys.stderr)
+        reason = "디깅 존 구간에 해당하는 트랙이 없음. --zone-low/--zone-high로 범위를 넓혀볼 것" if dig else "비교할 다른 트랙이 없음"
+        print(reason, file=sys.stderr)
         return
 
     for rank, r in enumerate(results, start=1):
@@ -208,6 +236,17 @@ def main() -> None:
     similar_parser.add_argument(
         "--key-weight", type=float, default=DEFAULT_KEY_WEIGHT, help=f"화성 키 가중치 (기본 {DEFAULT_KEY_WEIGHT})"
     )
+    similar_parser.add_argument(
+        "--dig",
+        action="store_true",
+        help="최근접 이웃 대신 '디깅 존'(적당히 먼 유사도 구간)에서 후보를 찾음 (필터버블 방지)",
+    )
+    similar_parser.add_argument(
+        "--zone-low", type=float, default=DEFAULT_ZONE_LOW, help=f"디깅 존 하한 (기본 {DEFAULT_ZONE_LOW})"
+    )
+    similar_parser.add_argument(
+        "--zone-high", type=float, default=DEFAULT_ZONE_HIGH, help=f"디깅 존 상한 (기본 {DEFAULT_ZONE_HIGH})"
+    )
 
     args = parser.parse_args()
 
@@ -217,7 +256,15 @@ def main() -> None:
         enrich_tracks(args.db)
     elif args.command == "similar":
         similar_tracks(
-            args.seed, args.top_n, args.db, args.tag_weight, args.audio_weight, args.key_weight
+            args.seed,
+            args.top_n,
+            args.db,
+            args.tag_weight,
+            args.audio_weight,
+            args.key_weight,
+            args.dig,
+            args.zone_low,
+            args.zone_high,
         )
 
 
