@@ -8,6 +8,7 @@ from pathlib import Path
 
 from . import crosswalk
 from .analysis import analyze_track
+from .boredom import compute_boredom_scores
 from .db import (
     connect,
     replace_top_tracks,
@@ -372,6 +373,21 @@ def sync_listening_history(db_path: str = DEFAULT_DB_PATH) -> None:
     print(f"완료: 청취 이력을 {db_path}에 저장함")
 
 
+def boredom_ranking(top_n: int = 10, db_path: str = DEFAULT_DB_PATH) -> None:
+    """청취 이력 기반 질림 스코어를 계산해 높은 순으로 출력한다."""
+    conn = connect(db_path)
+    scores = compute_boredom_scores(conn)
+    if not scores:
+        print("청취 이력이 없음. 먼저 sync-listening을 실행할 것", file=sys.stderr)
+        return
+
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
+    for rank, (track_id, score) in enumerate(ranked, start=1):
+        row = conn.execute("SELECT artist, title FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        artist, title = row if row else ("?", "?")
+        print(f"{rank}. {artist} - {title} (질림 스코어={score:.2f})")
+
+
 def _resolve_seed_track_id(conn, query: str) -> int | None:
     """`query`를 track id로 우선 해석하고, 숫자가 아니면 artist/title 부분일치로 찾는다."""
     if query.isdigit():
@@ -535,6 +551,10 @@ def main() -> None:
     )
     sync_listening_parser.add_argument("--db", default=DEFAULT_DB_PATH)
 
+    boredom_parser = subparsers.add_parser("boredom", help="청취 이력 기반 질림 스코어 랭킹 출력")
+    boredom_parser.add_argument("--top", type=int, default=10, dest="top_n")
+    boredom_parser.add_argument("--db", default=DEFAULT_DB_PATH)
+
     dig_relations_parser = subparsers.add_parser(
         "dig-relations", help="협업/레이블/샘플/영향 관계를 따라 아직 모르는 곡·아티스트 탐색"
     )
@@ -570,6 +590,8 @@ def main() -> None:
         )
     elif args.command == "sync-listening":
         sync_listening_history(args.db)
+    elif args.command == "boredom":
+        boredom_ranking(args.top_n, args.db)
     elif args.command == "dig-relations":
         dig_relations_command(args.seed, args.category, args.top_n, args.db, args.include_known)
 
