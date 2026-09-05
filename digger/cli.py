@@ -8,9 +8,17 @@ from pathlib import Path
 
 from . import crosswalk
 from .analysis import analyze_track
-from .db import connect, update_track_mbid, upsert_relations, upsert_track, upsert_track_tags
+from .db import (
+    connect,
+    replace_top_tracks,
+    update_track_mbid,
+    upsert_listening_history,
+    upsert_relations,
+    upsert_track,
+    upsert_track_tags,
+)
 from .graph import dig_relations
-from .metadata import discogs, lastfm, musicbrainz
+from .metadata import discogs, lastfm, musicbrainz, spotify
 from .relations import CATEGORIES, COLLAB_KEYWORDS, INFLUENCE_KEYWORDS, SAMPLE_KEYWORDS
 from .similarity import (
     DEFAULT_AUDIO_WEIGHT,
@@ -304,6 +312,66 @@ def collect_relations(db_path: str = DEFAULT_DB_PATH) -> None:
     print(f"완료: {len(rows)}곡의 관계를 {db_path}에 저장함")
 
 
+SPOTIFY_TOP_TRACK_RANGES = ["short_term", "medium_term", "long_term"]
+
+
+def _match_local_track(conn, artist: str, title: str) -> int | None:
+    """아티스트+제목 완전일치(대소문자 무시)로 로컬 트랙을 찾는다.
+
+    모호하게 여러 개가 걸리거나 하나도 없으면 억지로 추측하지 않고 None으로 남긴다.
+    """
+    rows = conn.execute(
+        "SELECT id FROM tracks WHERE LOWER(artist) = LOWER(?) AND LOWER(title) = LOWER(?)",
+        (artist, title),
+    ).fetchall()
+    return rows[0][0] if len(rows) == 1 else None
+
+
+def sync_listening_history(db_path: str = DEFAULT_DB_PATH) -> None:
+    """Spotify 최근 재생 + 상위 청취곡(short/medium/long_term)을 동기화한다."""
+    conn = connect(db_path)
+
+    print("최근 재생 이력 조회 중...")
+    recently_played = spotify.get_recently_played()
+    history_rows = []
+    for item in recently_played:
+        track = item.get("track") or {}
+        artist = ", ".join(a["name"] for a in track.get("artists", []))
+        title = track.get("name")
+        history_rows.append(
+            {
+                "spotify_track_id": track.get("id"),
+                "artist": artist,
+                "title": title,
+                "played_at": item["played_at"],
+                "track_id": _match_local_track(conn, artist, title) if artist and title else None,
+            }
+        )
+    upsert_listening_history(conn, history_rows)
+    print(f"    {len(history_rows)}건 저장")
+
+    for time_range in SPOTIFY_TOP_TRACK_RANGES:
+        print(f"상위 청취곡({time_range}) 조회 중...")
+        top_tracks = spotify.get_top_tracks(time_range=time_range)
+        top_rows = []
+        for rank, track in enumerate(top_tracks, start=1):
+            artist = ", ".join(a["name"] for a in track.get("artists", []))
+            title = track.get("name")
+            top_rows.append(
+                {
+                    "spotify_track_id": track.get("id"),
+                    "artist": artist,
+                    "title": title,
+                    "rank": rank,
+                    "track_id": _match_local_track(conn, artist, title) if artist and title else None,
+                }
+            )
+        replace_top_tracks(conn, time_range, top_rows)
+        print(f"    {len(top_rows)}건 저장")
+
+    print(f"완료: 청취 이력을 {db_path}에 저장함")
+
+
 def _resolve_seed_track_id(conn, query: str) -> int | None:
     """`query`를 track id로 우선 해석하고, 숫자가 아니면 artist/title 부분일치로 찾는다."""
     if query.isdigit():
@@ -462,6 +530,11 @@ def main() -> None:
         "--zone-high", type=float, default=DEFAULT_ZONE_HIGH, help=f"디깅 존 상한 (기본 {DEFAULT_ZONE_HIGH})"
     )
 
+    sync_listening_parser = subparsers.add_parser(
+        "sync-listening", help="Spotify 최근 재생/상위 청취곡 동기화(최초 실행 시 브라우저 인증)"
+    )
+    sync_listening_parser.add_argument("--db", default=DEFAULT_DB_PATH)
+
     dig_relations_parser = subparsers.add_parser(
         "dig-relations", help="협업/레이블/샘플/영향 관계를 따라 아직 모르는 곡·아티스트 탐색"
     )
@@ -495,6 +568,8 @@ def main() -> None:
             args.zone_low,
             args.zone_high,
         )
+    elif args.command == "sync-listening":
+        sync_listening_history(args.db)
     elif args.command == "dig-relations":
         dig_relations_command(args.seed, args.category, args.top_n, args.db, args.include_known)
 
