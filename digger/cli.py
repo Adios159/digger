@@ -32,31 +32,41 @@ def analyze_directory(directory: str, db_path: str = DEFAULT_DB_PATH) -> None:
     print(f"완료: {len(files)}곡을 {db_path}에 저장함")
 
 
+def _make_tag(
+    source: str,
+    tag_type: str,
+    raw_tag: str,
+    weight: float | None = None,
+    canonical_style: str | None = None,
+) -> dict:
+    return {
+        "source": source,
+        "tag_type": tag_type,
+        "raw_tag": raw_tag,
+        "weight": weight,
+        "canonical_style": canonical_style,
+    }
+
+
 def _discogs_tags(artist: str, title: str) -> list[dict]:
     release = discogs.search_release(artist, title)
     if not release:
         return []
-    tags = [
-        {"source": "discogs", "tag_type": "genre", "raw_tag": g, "canonical_style": g}
-        for g in release.get("genre", [])
-    ]
-    tags += [
-        {"source": "discogs", "tag_type": "style", "raw_tag": s, "canonical_style": s}
-        for s in release.get("style", [])
-    ]
+    tags = [_make_tag("discogs", "genre", g, canonical_style=g) for g in release.get("genre", [])]
+    tags += [_make_tag("discogs", "style", s, canonical_style=s) for s in release.get("style", [])]
     return tags
 
 
 def _lastfm_tags(artist: str, title: str) -> list[dict]:
     tags = lastfm.get_top_tags(artist, title)
     return [
-        {
-            "source": "lastfm",
-            "tag_type": "freeform",
-            "raw_tag": t["name"],
-            "weight": float(t.get("count", 0)),
-            "canonical_style": crosswalk.normalize(t["name"]),
-        }
+        _make_tag(
+            "lastfm",
+            "freeform",
+            t["name"],
+            weight=float(t.get("count") or 0),
+            canonical_style=crosswalk.normalize(t["name"]),
+        )
         for t in tags
     ]
 
@@ -67,13 +77,13 @@ def _musicbrainz_tags(artist: str, title: str) -> list[dict]:
         return []
     tags = musicbrainz.get_tags(recording["id"])
     return [
-        {
-            "source": "musicbrainz",
-            "tag_type": "freeform",
-            "raw_tag": t["name"],
-            "weight": float(t.get("count", 0)),
-            "canonical_style": crosswalk.normalize(t["name"]),
-        }
+        _make_tag(
+            "musicbrainz",
+            "freeform",
+            t["name"],
+            weight=float(t.get("count") or 0),
+            canonical_style=crosswalk.normalize(t["name"]),
+        )
         for t in tags
     ]
 
@@ -88,6 +98,9 @@ def enrich_tracks(db_path: str = DEFAULT_DB_PATH) -> None:
 
     for i, (track_id, artist, title) in enumerate(rows, start=1):
         print(f"[{i}/{len(rows)}] 태그 조회 중: {artist} - {title}")
+        if not artist:
+            print("    아티스트 정보 없음, 건너뜀", file=sys.stderr)
+            continue
         tags: list[dict] = []
         for label, fetch in (
             ("discogs", _discogs_tags),
