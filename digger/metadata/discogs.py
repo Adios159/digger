@@ -1,0 +1,45 @@
+"""Discogs 메타데이터 클라이언트 (personal access token 필요).
+
+검색 결과 자체에 공식 genre/style 필드가 포함되어 있어,
+크로스워크 없이 바로 canonical 태그로 쓸 수 있다.
+"""
+
+from __future__ import annotations
+
+import time
+from typing import Any
+
+import requests
+
+from .. import config
+
+BASE_URL = "https://api.discogs.com"
+_MIN_INTERVAL = 1.1  # 인증된 요청 분당 60회 제한 대비 여유
+_last_request_time = 0.0
+
+
+def _request(path: str, params: dict[str, Any]) -> dict[str, Any]:
+    global _last_request_time
+    elapsed = time.monotonic() - _last_request_time
+    if elapsed < _MIN_INTERVAL:
+        time.sleep(_MIN_INTERVAL - elapsed)
+
+    response = requests.get(
+        f"{BASE_URL}/{path}",
+        params={**params, "token": config.DISCOGS_TOKEN},
+        headers={"User-Agent": "digger/0.1"},
+        timeout=10,
+    )
+    _last_request_time = time.monotonic()
+    response.raise_for_status()
+    return response.json()
+
+
+def search_release(artist: str, title: str) -> dict[str, Any] | None:
+    """아티스트+트랙 제목으로 검색해 최상위 결과(genre/style 포함)를 반환한다."""
+    data = _request(
+        "database/search",
+        {"artist": artist, "track": title, "type": "release"},
+    )
+    results = data.get("results", [])
+    return results[0] if results else None
