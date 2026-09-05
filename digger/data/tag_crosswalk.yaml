@@ -1,0 +1,25 @@
+# Last.fm/MusicBrainz 자유형(folksonomy) 태그 -> Discogs canonical style 크로스워크.
+# 수동 큐레이션 시작점(기획서 6-1). 400개 전체를 미리 채우지 않고,
+# 실제 enrich 실행 결과를 보며 점진적으로 항목을 늘려간다.
+# 매핑에 없는 태그는 canonical_style=NULL로 정직하게 남겨둔다.
+
+house: House
+deep house: Deep House
+tech house: Tech House
+progressive house: Progressive House
+techno: Techno
+minimal techno: Minimal
+minimal: Minimal
+electronic: Electronic
+electronica: Electronic
+idm: IDM
+ambient: Ambient
+downtempo: Downtempo
+disco: Disco
+trance: Trance
+dubstep: Dubstep
+drum and bass: Drum n Bass
+dnb: Drum n Bass
+electro: Electro
+synthpop: Synth-pop
+synth-pop: Synth-pop

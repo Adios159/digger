@@ -22,6 +22,18 @@ CREATE TABLE IF NOT EXISTS tracks (
     raw_features TEXT,
     analyzed_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS track_tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    track_id INTEGER NOT NULL REFERENCES tracks(id),
+    source TEXT NOT NULL,
+    tag_type TEXT NOT NULL,
+    raw_tag TEXT NOT NULL,
+    weight REAL,
+    canonical_style TEXT,
+    fetched_at TEXT NOT NULL,
+    UNIQUE(track_id, source, tag_type, raw_tag)
+);
 """
 
 _UPSERT_SQL = """
@@ -43,9 +55,41 @@ ON CONFLICT(file_path) DO UPDATE SET
 
 def connect(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
-    conn.execute(SCHEMA)
+    conn.executescript(SCHEMA)
     conn.commit()
     return conn
+
+
+_UPSERT_TAG_SQL = """
+INSERT INTO track_tags (track_id, source, tag_type, raw_tag, weight, canonical_style, fetched_at)
+VALUES (:track_id, :source, :tag_type, :raw_tag, :weight, :canonical_style, :fetched_at)
+ON CONFLICT(track_id, source, tag_type, raw_tag) DO UPDATE SET
+    weight=excluded.weight,
+    canonical_style=excluded.canonical_style,
+    fetched_at=excluded.fetched_at;
+"""
+
+
+def upsert_track_tags(conn: sqlite3.Connection, track_id: int, tags: list[dict[str, Any]]) -> None:
+    """트랙 하나에 대한 태그 목록을 저장한다(있으면 갱신).
+
+    tags의 각 항목은 source, tag_type, raw_tag, weight(선택), canonical_style(선택) 키를 가진다.
+    """
+    fetched_at = datetime.now(timezone.utc).isoformat()
+    rows = [
+        {
+            "track_id": track_id,
+            "source": tag["source"],
+            "tag_type": tag["tag_type"],
+            "raw_tag": tag["raw_tag"],
+            "weight": tag.get("weight"),
+            "canonical_style": tag.get("canonical_style"),
+            "fetched_at": fetched_at,
+        }
+        for tag in tags
+    ]
+    conn.executemany(_UPSERT_TAG_SQL, rows)
+    conn.commit()
 
 
 def upsert_track(conn: sqlite3.Connection, track: dict[str, Any]) -> None:
