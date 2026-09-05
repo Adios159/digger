@@ -1,0 +1,10 @@
+music/
+*.flac
+*.mp3
+*.wav
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.db
+*.egg-info/
