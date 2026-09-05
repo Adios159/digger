@@ -40,10 +40,16 @@ def search_release(artist: str, title: str) -> dict[str, Any] | None:
 
     `artist`/`track` 필드로 엄격 검색하면 컴필레이션 릴리즈(release 아티스트가
     "Various"로 등록된 경우)를 놓치므로, 통합 텍스트 쿼리(`q`)로 느슨하게 검색한다.
+    대신 느슨한 검색이 엉뚱한 결과를 상위에 올릴 수 있으므로, 결과의 `title`에
+    요청한 아티스트명이 실제로 포함된 경우에만 채택하고 아니면 공백(None)으로 남긴다.
     """
     data = _request(
         "database/search",
         {"q": f"{artist} {title}", "type": "release"},
     )
     results = data.get("results", [])
-    return results[0] if results else None
+    artist_lower = artist.strip().lower()
+    for result in results:
+        if artist_lower in result.get("title", "").lower():
+            return result
+    return None
