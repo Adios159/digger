@@ -2,7 +2,14 @@
 # 수동 큐레이션 시작점(기획서 6-1). 400개 전체를 미리 채우지 않고,
 # 실제 enrich 실행 결과를 보며 점진적으로 항목을 늘려간다.
 # 매핑에 없는 태그는 canonical_style=NULL로 정직하게 남겨둔다.
+#
+# 여기에 넣을 것은 "Discogs가 절대 그렇게 부르지 않는 표기"뿐이다.
+# 표기 차이(Hip-Hop/hip hop)와 Discogs가 실제로 쓰는 세부 장르는
+# crosswalk.build_resolver의 어휘 대조가 알아서 잡는다. 어휘에 이미 있는
+# 세부 장르를 상위 장르로 여기 적으면(indie rock -> Rock) YAML이 우선이라
+# 나중에 Discogs가 "Indie Rock"을 줘도 뭉개버리므로 오히려 손해다.
 
+# 전자음악 계열
 house: House
 deep house: Deep House
 tech house: Tech House
@@ -12,6 +19,7 @@ minimal techno: Minimal
 minimal: Minimal
 electronic: Electronic
 electronica: Electronic
+electropop: Electronic
 idm: IDM
 ambient: Ambient
 downtempo: Downtempo
@@ -23,3 +31,23 @@ dnb: Drum n Bass
 electro: Electro
 synthpop: Synth-pop
 synth-pop: Synth-pop
+
+# 힙합 계열 — Last.fm은 "rap"으로, Discogs는 "Hip Hop"으로 부른다.
+# 지역/시대 수식이 붙은 변형도 Discogs 쪽엔 대응 style이 없어 여기서 흡수한다.
+rap: Hip Hop
+east coast rap: Hip Hop
+west coast rap: Hip Hop
+southern rap: Hip Hop
+hardcore rap: Hip Hop
+dirty south: Hip Hop
+g-funk: Hip Hop
+jazz rap: Jazzy Hip-Hop
+conscious hip hop: Conscious
+gangsta rap: Gangsta
+
+# R&B — Discogs는 "Contemporary R&B", Last.fm은 rnb/r&b로 적는다
+rnb: Contemporary R&B
+r&b: Contemporary R&B
+
+# 록 계열
+k-rock: Rock

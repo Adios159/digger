@@ -68,8 +68,8 @@ function renderLibrary() {
         <div class="track-stats">${statChips(t)}</div>
         <div class="tag-row">
           ${t.tags.map((tag) => `
-            <span class="tag-chip" title="${tag.source}">
-              <span class="tag-dot tag-dot-${tag.source}"></span>${tag.canonical_style}
+            <span class="tag-chip" title="${tag.confirmed ? "두 출처가 함께 지목" : tag.sources.join(", ")}">
+              <span class="tag-dot ${tag.confirmed ? "tag-dot-confirmed" : "tag-dot-single"}"></span>${tag.style}
             </span>
           `).join("")}
         </div>
@@ -220,14 +220,16 @@ const CATEGORY_LABELS = { collab: "협업", label: "레이블", samples: "샘플
 async function renderTrackModal(track) {
   const boredom = BOREDOM[track.id];
 
-  const tagsHtml = track.tags.map((tag) => `
-    <div class="tag-detail-row">
-      <span class="tag-dot tag-dot-${tag.source}"></span>
-      <span class="tag-detail-source">${tag.source}</span>
-      <span class="tag-detail-name">${tag.canonical_style || tag.raw_tag}</span>
-      <span class="tag-detail-weight">weight ${tag.weight ?? "-"}</span>
-    </div>
-  `).join("");
+  const tagsHtml = track.tags.length
+    ? track.tags.map((tag) => `
+        <div class="tag-detail-row">
+          <span class="tag-dot ${tag.confirmed ? "tag-dot-confirmed" : "tag-dot-single"}"></span>
+          <span class="tag-detail-source">${tag.confirmed ? "확증" : tag.sources.join(", ")}</span>
+          <span class="tag-detail-name">${tag.style}</span>
+          <span class="tag-detail-weight">${tag.weight.toFixed(2)}</span>
+        </div>
+      `).join("")
+    : `<p class="modal-empty-note">장르로 인정된 태그 없음 — enrich를 먼저 실행했는지 확인할 것</p>`;
 
   const categories = Object.keys(CATEGORY_LABELS);
   let relationsHtml;
@@ -256,7 +258,7 @@ async function renderTrackModal(track) {
     <div class="track-stats">${statChips(track)}</div>
 
     <div class="modal-section">
-      <div class="modal-section-label">장르 태그 (${track.tags.length})</div>
+      <div class="modal-section-label">장르 태그 (${track.tags.length}) · 가중치는 출처 간 합의 정도</div>
       ${tagsHtml}
     </div>
 

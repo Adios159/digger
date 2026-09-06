@@ -24,6 +24,7 @@ from .graph import dig_relations
 from .metadata import spotify
 from .relations import CATEGORIES
 from .similarity import DEFAULT_ZONE_HIGH, DEFAULT_ZONE_LOW, find_digging_zone, find_similar
+from .vectorize import agreement_weights, resolve_styles_by_source
 
 DEFAULT_DB_PATH = "digger.db"
 
@@ -51,27 +52,47 @@ def _get_track_row(conn: sqlite3.Connection, track_id: int) -> tuple:
     return row
 
 
+def _resolved_tags(conn: sqlite3.Connection, track_ids: list[int]) -> dict[int, list[dict]]:
+    """트랙별 태그를 canonical style로 해석하고 출처 간 합의 가중치를 붙인다.
+
+    해석되지 않은 자유형 태그(지역·연대·감상 같은 비장르 태그)와 오매칭으로 폐기된
+    Discogs 태그는 유사도에서도 쓰이지 않으므로 화면에도 내보내지 않는다 —
+    유사도가 보는 것과 사람이 보는 것을 같게 유지한다.
+    """
+    discogs, freeform = resolve_styles_by_source(conn)
+
+    resolved: dict[int, list[dict]] = {}
+    for track_id in track_ids:
+        by_discogs = discogs.get(track_id, {})
+        by_freeform = freeform.get(track_id, {})
+        entries = []
+        for style, weight in sorted(agreement_weights(by_discogs, by_freeform).items(), key=lambda kv: -kv[1]):
+            sources = [
+                name
+                for name, styles in (("discogs", by_discogs), ("freeform", by_freeform))
+                if style in styles
+            ]
+            entries.append(
+                {
+                    "style": style,
+                    "weight": round(weight, 3),
+                    "sources": sources,
+                    "confirmed": len(sources) > 1,
+                }
+            )
+        resolved[track_id] = entries
+    return resolved
+
+
 @app.get("/tracks")
 def list_tracks(conn: sqlite3.Connection = Depends(get_db)) -> list[dict]:
     """트랙 목록을 태그와 함께 반환한다(라이브러리 화면이 트랙마다 태그 칩을 보여줘야 해서)."""
     rows = conn.execute(f"SELECT {', '.join(TRACK_COLUMNS)} FROM tracks ORDER BY id").fetchall()
     tracks = [dict(zip(TRACK_COLUMNS, row)) for row in rows]
 
-    tags_by_track: dict[int, list[dict]] = {}
-    for track_id, source, tag_type, raw_tag, weight, canonical_style in conn.execute(
-        "SELECT track_id, source, tag_type, raw_tag, weight, canonical_style FROM track_tags"
-    ):
-        tags_by_track.setdefault(track_id, []).append(
-            {
-                "source": source,
-                "tag_type": tag_type,
-                "raw_tag": raw_tag,
-                "weight": weight,
-                "canonical_style": canonical_style,
-            }
-        )
+    tags_by_track = _resolved_tags(conn, [track["id"] for track in tracks])
     for track in tracks:
-        track["tags"] = tags_by_track.get(track["id"], [])
+        track["tags"] = tags_by_track[track["id"]]
     return tracks
 
 
@@ -79,14 +100,7 @@ def list_tracks(conn: sqlite3.Connection = Depends(get_db)) -> list[dict]:
 def get_track(track_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
     columns = [*TRACK_COLUMNS, "mb_recording_id"]
     track = dict(zip(columns, _get_track_row(conn, track_id)))
-
-    tags = conn.execute(
-        "SELECT source, tag_type, raw_tag, weight, canonical_style FROM track_tags WHERE track_id = ?",
-        (track_id,),
-    ).fetchall()
-    track["tags"] = [
-        {"source": s, "tag_type": t, "raw_tag": r, "weight": w, "canonical_style": c} for s, t, r, w, c in tags
-    ]
+    track["tags"] = _resolved_tags(conn, [track_id])[track_id]
     return track
 
 
