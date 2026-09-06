@@ -94,3 +94,36 @@ def search_release(artist: str, title: str) -> dict[str, Any] | None:
         if release_artist_key in _VARIOUS_ARTISTS_KEYS and _release_has_track(result["id"], artist, title):
             return result
     return None
+
+
+def get_credits(release_id: int, title: str) -> list[dict[str, Any]]:
+    """릴리즈 크레딧(프로듀서·작곡·믹싱 등)을 [{role, name, discogs_artist_id}]로 반환한다.
+
+    Discogs는 크레딧을 릴리즈 전체(`extraartists`)와 트랙별(`tracklist[].extraartists`)
+    두 군데에 나눠 담는다. 컴필레이션에서는 트랙별 크레딧만 우리 곡의 것이므로,
+    해당 트랙의 크레딧과 릴리즈 전체 크레딧을 함께 모은다.
+
+    MusicBrainz가 비영어권 곡 크레딧을 거의 갖고 있지 않아 "사람 축" 탐색이 비는데,
+    이미 쓰고 있는 Discogs 토큰으로 메울 수 있는 만큼은 여기서 메운다.
+    """
+    detail = _request(f"releases/{release_id}", {})
+
+    credits = list(detail.get("extraartists") or [])
+    title_key = _match_key(title)
+    for track in detail.get("tracklist") or []:
+        if _match_key(track.get("title", "")) == title_key:
+            credits += track.get("extraartists") or []
+
+    seen = set()
+    result = []
+    for credit in credits:
+        name, role = credit.get("name"), credit.get("role")
+        if not name or not role:
+            continue
+        # Discogs는 "Producer, Mixed By"처럼 한 사람의 여러 역할을 한 필드에 몰아넣는다
+        for single_role in (r.strip() for r in role.split(",")):
+            if not single_role or (name, single_role) in seen:
+                continue
+            seen.add((name, single_role))
+            result.append({"role": single_role, "name": name, "discogs_artist_id": credit.get("id")})
+    return result
