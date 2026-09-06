@@ -53,10 +53,26 @@ def _get_track_row(conn: sqlite3.Connection, track_id: int) -> tuple:
 
 @app.get("/tracks")
 def list_tracks(conn: sqlite3.Connection = Depends(get_db)) -> list[dict]:
-    rows = conn.execute(
-        f"SELECT {', '.join(TRACK_COLUMNS)} FROM tracks ORDER BY id"
-    ).fetchall()
-    return [dict(zip(TRACK_COLUMNS, row)) for row in rows]
+    """트랙 목록을 태그와 함께 반환한다(라이브러리 화면이 트랙마다 태그 칩을 보여줘야 해서)."""
+    rows = conn.execute(f"SELECT {', '.join(TRACK_COLUMNS)} FROM tracks ORDER BY id").fetchall()
+    tracks = [dict(zip(TRACK_COLUMNS, row)) for row in rows]
+
+    tags_by_track: dict[int, list[dict]] = {}
+    for track_id, source, tag_type, raw_tag, weight, canonical_style in conn.execute(
+        "SELECT track_id, source, tag_type, raw_tag, weight, canonical_style FROM track_tags"
+    ):
+        tags_by_track.setdefault(track_id, []).append(
+            {
+                "source": source,
+                "tag_type": tag_type,
+                "raw_tag": raw_tag,
+                "weight": weight,
+                "canonical_style": canonical_style,
+            }
+        )
+    for track in tracks:
+        track["tags"] = tags_by_track.get(track["id"], [])
+    return tracks
 
 
 @app.get("/tracks/{track_id}")
