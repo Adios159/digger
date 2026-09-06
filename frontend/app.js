@@ -1,7 +1,34 @@
-/* 목업 데이터 기반 인터랙션. 백엔드 없이 브라우저에서 유사도 계산까지 직접 수행함
-   (digger/similarity.py의 태그 코사인 유사도 로직을 그대로 옮김). */
+/* digger API(digger/api.py)를 호출해 렌더링함. 유사도/관계/질림 스코어 계산은
+   전부 백엔드(similarity.py/graph.py/boredom.py)가 하고, 여기서는 결과만 그림. */
 
-const trackById = (id) => MOCK_TRACKS.find((t) => t.id === id);
+let TRACKS = [];
+let BOREDOM = {};
+
+const trackById = (id) => TRACKS.find((t) => t.id === id);
+
+async function fetchJSON(url) {
+  const res = await fetch(url);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `${url} 요청 실패 (${res.status})`);
+  }
+  return res.json();
+}
+
+async function loadInitialData() {
+  const [tracks, boredomList] = await Promise.all([
+    fetchJSON("/tracks"),
+    fetchJSON("/boredom?top=1000"),
+  ]);
+  TRACKS = tracks;
+  BOREDOM = Object.fromEntries(boredomList.map((b) => [b.track_id, b.boredom_score]));
+}
+
+function showAppError(err) {
+  const banner = document.getElementById("app-error-banner");
+  banner.textContent = `API 서버에 연결하지 못함: ${err.message} — uvicorn digger.api:app으로 서버를 먼저 실행할 것`;
+  banner.hidden = false;
+}
 
 function formatDuration(sec) {
   const m = Math.floor(sec / 60);
@@ -85,9 +112,9 @@ function rankSimilar(seedId, { boredomWeight = 0, excludeTiredAbove = null } = {
 /* ---------- 라이브러리 탭 ---------- */
 
 function renderLibrary() {
-  document.getElementById("track-count").textContent = MOCK_TRACKS.length;
+  document.getElementById("track-count").textContent = TRACKS.length;
   const grid = document.getElementById("library-grid");
-  grid.innerHTML = MOCK_TRACKS.map((t) => `
+  grid.innerHTML = TRACKS.map((t) => `
     <article class="track-card glass" onclick="openTrackModal(${t.id})">
       <div class="track-art">${initials(t.artist)}</div>
       <div class="track-body">
@@ -114,7 +141,7 @@ function renderLibrary() {
 /* ---------- 탐색(Similar) 탭 ---------- */
 
 function populateSeedSelect(selectEl) {
-  selectEl.innerHTML = MOCK_TRACKS.map((t) => `<option value="${t.id}">${t.artist} - ${t.title}</option>`).join("");
+  selectEl.innerHTML = TRACKS.map((t) => `<option value="${t.id}">${t.artist} - ${t.title}</option>`).join("");
 }
 
 function renderSeedBanner(el, track, extra = "") {
@@ -207,12 +234,18 @@ function renderRelations() {
 /* ---------- 질림 랭킹 탭 ---------- */
 
 function renderBoredom() {
-  const ranked = Object.entries(MOCK_BOREDOM_SCORES)
+  const ranked = Object.entries(BOREDOM)
     .map(([id, score]) => ({ track: trackById(Number(id)), score }))
+    .filter((r) => r.track)
     .sort((a, b) => b.score - a.score);
-  const max = Math.max(...ranked.map((r) => r.score));
 
   const list = document.getElementById("boredom-list");
+  if (ranked.length === 0) {
+    list.innerHTML = `<div class="empty-state glass">청취 이력이 없음 — sync-listening을 먼저 실행할 것</div>`;
+    return;
+  }
+
+  const max = Math.max(...ranked.map((r) => r.score));
   list.innerHTML = ranked.map((r, i) => `
     <div class="boredom-row" onclick="openTrackModal(${r.track.id})">
       <div class="result-rank">${i + 1}</div>
@@ -378,9 +411,17 @@ function setupRelationsControls() {
   document.getElementById("include-known-toggle").addEventListener("change", renderRelations);
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+document.addEventListener("DOMContentLoaded", async () => {
   setupTabs();
   setupModal();
+
+  try {
+    await loadInitialData();
+  } catch (err) {
+    showAppError(err);
+    return;
+  }
+
   renderLibrary();
   setupSimilarControls();
   setupRelationsControls();
