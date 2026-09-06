@@ -12,6 +12,7 @@ from .boredom import compute_boredom_scores
 from .db import (
     connect,
     insert_feedback,
+    mark_track_enriched,
     replace_top_tracks,
     replace_track_tags,
     update_track_mbid,
@@ -117,12 +118,27 @@ def get_enrich_progress() -> dict:
     return dict(ENRICH_PROGRESS)
 
 
-def enrich_tracks(db_path: str = DEFAULT_DB_PATH) -> None:
-    """DB의 모든 트랙에 대해 Last.fm/MusicBrainz/Discogs 태그를 조회해 적재한다."""
+def enrich_tracks(db_path: str = DEFAULT_DB_PATH, force: bool = False) -> None:
+    """DB의 트랙에 대해 Last.fm/MusicBrainz/Discogs 태그를 조회해 적재한다.
+
+    기본적으로 이전 실행에서 태그 조회에 성공한(enriched_at이 찍힌) 트랙은 건너뛴다 —
+    소스별 rate limit(Discogs 1.1초, MusicBrainz 1초) 때문에 매번 전체를 다시 돌면
+    트랙 수에 비례해 느려지고, 새로 들어온 트랙 몇 개를 위해 몇 분씩 기다려야 했다.
+    crosswalk.yaml 갱신 후 재정규화처럼 전체를 다시 돌아야 할 때는 force=True로 넘긴다.
+    """
     conn = connect(db_path)
-    rows = conn.execute("SELECT id, artist, title FROM tracks").fetchall()
-    if not rows:
+    all_count = conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+    if all_count == 0:
         print("DB에 트랙이 없음. 먼저 analyze를 실행할 것", file=sys.stderr)
+        return
+
+    query = "SELECT id, artist, title FROM tracks" if force else "SELECT id, artist, title FROM tracks WHERE enriched_at IS NULL"
+    rows = conn.execute(query).fetchall()
+    skipped = all_count - len(rows)
+    if skipped:
+        print(f"이미 태그가 있는 {skipped}곡은 건너뜀(전체 재실행하려면 --force)")
+    if not rows:
+        print("새로 조회할 트랙이 없음")
         return
 
     ENRICH_PROGRESS.update(running=True, current=0, total=len(rows), artist=None, title=None)
@@ -150,6 +166,10 @@ def enrich_tracks(db_path: str = DEFAULT_DB_PATH) -> None:
 
             # 실패한 소스의 기존 태그는 건드리지 않고, 성공한 소스만 이번 결과로 교체
             replace_track_tags(conn, track_id, fetched_sources, tags)
+            if fetched_sources:
+                # 하나라도 성공해야 다음 실행에서 건너뛴다 — 전부 실패(네트워크 문제 등)한
+                # 트랙은 enriched_at을 남기지 않아 다음 실행에서 자동으로 재시도된다.
+                mark_track_enriched(conn, track_id)
     finally:
         ENRICH_PROGRESS["running"] = False
     print(f"완료: {len(rows)}곡의 태그를 {db_path}에 저장함")
@@ -742,6 +762,9 @@ def main() -> None:
 
     enrich_parser = subparsers.add_parser("enrich", help="DB의 트랙에 Last.fm/MusicBrainz/Discogs 태그 적재")
     enrich_parser.add_argument("--db", default=DEFAULT_DB_PATH)
+    enrich_parser.add_argument(
+        "--force", action="store_true", help="이미 태그가 있는 트랙도 포함해 전체를 다시 조회"
+    )
 
     collect_relations_parser = subparsers.add_parser(
         "collect-relations", help="DB의 트랙에 MusicBrainz 협업/레이블/샘플/영향 관계 적재"
@@ -836,7 +859,7 @@ def main() -> None:
     if args.command == "analyze":
         analyze_directory(args.directory, args.db)
     elif args.command == "enrich":
-        enrich_tracks(args.db)
+        enrich_tracks(args.db, force=args.force)
     elif args.command == "collect-relations":
         collect_relations(args.db)
     elif args.command == "similar":

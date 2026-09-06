@@ -439,8 +439,9 @@ const PIPELINES = [
   {
     key: "enrich",
     title: "enrich",
-    desc: "모든 트랙에 Discogs → Last.fm → MusicBrainz 순으로 장르 태그를 조회해 적재. 소스별 rate limit 때문에 트랙 수에 비례해 오래 걸림.",
-    request: () => ["/enrich", undefined],
+    desc: "Discogs → Last.fm → MusicBrainz 순으로 장르 태그를 조회해 적재. 이미 태그가 있는 트랙은 기본적으로 건너뛰고 새 트랙만 처리함(외부 소스 rate limit 때문에 매번 전체를 돌면 트랙 수에 비례해 느려짐). crosswalk.yaml을 고쳐서 재정규화가 필요하면 아래 체크박스로 전체 재실행.",
+    force: true,
+    request: (_v, force) => [`/enrich${force ? "?force=true" : ""}`, undefined],
   },
   {
     key: "collect-relations",
@@ -490,6 +491,12 @@ function renderPipelinePanel() {
                <input id="${pipelineInputId(p.key)}" type="${p.input.type}" value="${p.input.value}">
              </label>`
           : ""}
+        ${p.force
+          ? `<label class="pipeline-checkbox">
+               <input type="checkbox" id="pipeline-force-${p.key}">
+               <span>전체 재실행</span>
+             </label>`
+          : ""}
         <button class="primary-btn pipeline-run" onclick="runPipeline('${p.key}')">실행</button>
       </div>
     </div>`
@@ -525,7 +532,8 @@ async function runPipeline(key) {
   if (pipelineRunning) return;
   const spec = PIPELINES.find((p) => p.key === key);
   const inputEl = spec.input ? document.getElementById(pipelineInputId(key)) : null;
-  const [url, body] = spec.request(inputEl ? inputEl.value.trim() : null);
+  const forceEl = spec.force ? document.getElementById(`pipeline-force-${key}`) : null;
+  const [url, body] = spec.request(inputEl ? inputEl.value.trim() : null, forceEl ? forceEl.checked : false);
 
   const status = document.getElementById(`pipeline-status-${key}`);
   const progressEl = document.getElementById(`pipeline-progress-${key}`);

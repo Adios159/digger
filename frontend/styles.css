@@ -895,6 +895,17 @@ input[type="range"]::-moz-range-thumb {
 
 .pipeline-input input:focus { outline: none; border-color: var(--green); }
 
+.pipeline-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+.pipeline-checkbox input { accent-color: var(--green); }
+
 /* ---------- 토스트 ---------- */
 
 .toast-host {

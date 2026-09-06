@@ -251,9 +251,13 @@ def trigger_analyze(body: AnalyzeIn) -> dict:
 
 
 @app.post("/enrich")
-def trigger_enrich() -> dict:
-    """DB의 모든 트랙에 Last.fm/MusicBrainz/Discogs 태그를 적재한다."""
-    cli_module.enrich_tracks(DEFAULT_DB_PATH)
+def trigger_enrich(force: bool = False) -> dict:
+    """트랙에 Last.fm/MusicBrainz/Discogs 태그를 적재한다.
+
+    기본은 이전에 태그 조회가 성공한 트랙을 건너뛴다(cli.enrich_tracks 참고).
+    force=True면 전체를 다시 조회한다(crosswalk.yaml 갱신 후 재정규화 등).
+    """
+    cli_module.enrich_tracks(DEFAULT_DB_PATH, force=force)
     return {"status": "ok"}
 
 
