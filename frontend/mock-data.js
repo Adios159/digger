@@ -90,12 +90,100 @@ const MOCK_TRACKS = [
       { source: "musicbrainz", raw_tag: "soul", canonical_style: "soul", weight: 1 },
     ],
   },
+  {
+    id: 11, artist: "Kraftwerk", title: "Trans-Europe Express", album: "Trans-Europe Express",
+    bpm: 120.0, key: "A", key_scale: "minor", energy: 0.55, duration_sec: 385,
+    tags: [
+      { source: "discogs", raw_tag: "Electronic", canonical_style: "electronic", weight: 3 },
+      { source: "lastfm", raw_tag: "krautrock", canonical_style: "krautrock", weight: 2 },
+      { source: "musicbrainz", raw_tag: "synth-pop", canonical_style: "synth-pop", weight: 1 },
+    ],
+  },
+  {
+    id: 12, artist: "Goldie", title: "Inner City Life", album: "Timeless",
+    bpm: 172.0, key: "D", key_scale: "minor", energy: 0.66, duration_sec: 410,
+    tags: [
+      { source: "discogs", raw_tag: "Drum n Bass", canonical_style: "drum-and-bass", weight: 3 },
+      { source: "lastfm", raw_tag: "jungle", canonical_style: "jungle", weight: 2 },
+      { source: "lastfm", raw_tag: "electronic", canonical_style: "electronic", weight: 1 },
+    ],
+  },
+  {
+    id: 13, artist: "Tatsuro Yamashita", title: "Sparkle", album: "For You",
+    bpm: 124.0, key: "G", key_scale: "major", energy: 0.7, duration_sec: 379,
+    tags: [
+      { source: "discogs", raw_tag: "City Pop", canonical_style: "city-pop", weight: 3 },
+      { source: "lastfm", raw_tag: "funk", canonical_style: "funk", weight: 1 },
+      { source: "lastfm", raw_tag: "soul", canonical_style: "soul", weight: 1 },
+    ],
+  },
+  {
+    id: 14, artist: "Wiley", title: "Eskimo", album: "Treddin' on Thin Ice",
+    bpm: 140.0, key: "C", key_scale: "minor", energy: 0.6, duration_sec: 224,
+    tags: [
+      { source: "discogs", raw_tag: "Grime", canonical_style: "grime", weight: 3 },
+      { source: "lastfm", raw_tag: "uk garage", canonical_style: "garage", weight: 1 },
+      { source: "lastfm", raw_tag: "bass music", canonical_style: "bass-music", weight: 1 },
+    ],
+  },
+  {
+    id: 15, artist: "João Gilberto", title: "Águas de Março", album: "João Gilberto",
+    bpm: 100.0, key: "F", key_scale: "major", energy: 0.3, duration_sec: 210,
+    tags: [
+      { source: "discogs", raw_tag: "Bossa Nova", canonical_style: "bossa-nova", weight: 3 },
+      { source: "lastfm", raw_tag: "jazz", canonical_style: "jazz", weight: 1 },
+    ],
+  },
+  {
+    id: 16, artist: "Joy Division", title: "Disorder", album: "Unknown Pleasures",
+    bpm: 130.0, key: "A", key_scale: "minor", energy: 0.65, duration_sec: 231,
+    tags: [
+      { source: "discogs", raw_tag: "Post-Punk", canonical_style: "post-punk", weight: 3 },
+      { source: "lastfm", raw_tag: "new wave", canonical_style: "new-wave", weight: 1 },
+    ],
+  },
+  {
+    id: 17, artist: "Chic", title: "Good Times", album: "Risqué",
+    bpm: 118.0, key: "D", key_scale: "minor", energy: 0.75, duration_sec: 501,
+    tags: [
+      { source: "discogs", raw_tag: "Disco", canonical_style: "disco", weight: 3 },
+      { source: "musicbrainz", raw_tag: "funk", canonical_style: "funk", weight: 2 },
+    ],
+  },
+  {
+    id: 18, artist: "King Tubby", title: "Natty Dub", album: "Dub Gone Crazy",
+    bpm: 78.0, key: "G", key_scale: "minor", energy: 0.5, duration_sec: 300,
+    tags: [
+      { source: "discogs", raw_tag: "Dub", canonical_style: "dub", weight: 3 },
+      { source: "lastfm", raw_tag: "reggae", canonical_style: "reggae", weight: 2 },
+    ],
+  },
+  {
+    id: 19, artist: "RP Boo", title: "Baby Come On", album: "Legacy",
+    bpm: 160.0, key: "C", key_scale: "minor", energy: 0.68, duration_sec: 280,
+    tags: [
+      { source: "discogs", raw_tag: "Footwork", canonical_style: "footwork", weight: 3 },
+      { source: "lastfm", raw_tag: "juke", canonical_style: "juke", weight: 1 },
+      { source: "lastfm", raw_tag: "electronic", canonical_style: "electronic", weight: 1 },
+    ],
+  },
+  {
+    id: 20, artist: "Aretha Franklin", title: "Rock Steady", album: "Young, Gifted and Black",
+    bpm: 116.0, key: "E", key_scale: "major", energy: 0.8, duration_sec: 296,
+    tags: [
+      { source: "discogs", raw_tag: "Soul", canonical_style: "soul", weight: 3 },
+      { source: "musicbrainz", raw_tag: "funk", canonical_style: "funk", weight: 2 },
+      { source: "lastfm", raw_tag: "gospel", canonical_style: "gospel", weight: 1 },
+    ],
+  },
 ];
 
 // sync-listening + boredom 명령 결과를 흉내 낸 질림 스코어 (트랙 id -> score)
 const MOCK_BOREDOM_SCORES = {
   1: 4.2, 2: 0.8, 3: 2.1, 4: 0.3, 5: 1.5,
   6: 3.0, 7: 0.6, 8: 0.2, 9: 1.0, 10: 3.8,
+  11: 1.8, 12: 2.6, 13: 0.5, 14: 3.3, 15: 0.1,
+  16: 1.2, 17: 4.5, 18: 0.4, 19: 2.9, 20: 0.7,
 };
 
 // collect-relations 결과를 흉내 낸 관계 그래프. mb_recording_id가 없는 트랙(관계 미수집)도
@@ -155,6 +243,39 @@ const MOCK_RELATIONS = {
       { entity_name: "EMI Nigeria", path: "Water No Get Enemy → released_on_label → EMI Nigeria", already_known: false },
     ],
     samples: [],
+    influence: [],
+  },
+  12: {
+    collab: [
+      { entity_name: "Diane Charlemagne", path: "Inner City Life → vocals → Diane Charlemagne", already_known: false },
+    ],
+    label: [
+      { entity_name: "FFRR", path: "Inner City Life → released_on_label → FFRR", already_known: false },
+    ],
+    samples: [],
+    influence: [
+      { entity_name: "4hero", path: "Goldie → influenced_by → 4hero", already_known: true },
+    ],
+  },
+  17: {
+    collab: [
+      { entity_name: "Nile Rodgers", path: "Good Times → guitar → Nile Rodgers", already_known: true },
+      { entity_name: "Bernard Edwards", path: "Good Times → bass → Bernard Edwards", already_known: false },
+    ],
+    label: [
+      { entity_name: "Atlantic Records", path: "Good Times → released_on_label → Atlantic Records", already_known: true },
+    ],
+    samples: [],
+    influence: [],
+  },
+  19: {
+    collab: [],
+    label: [
+      { entity_name: "Planet Mu", path: "Baby Come On → released_on_label → Planet Mu", already_known: false },
+    ],
+    samples: [
+      { entity_name: "DJ Slugo - Juke Track", path: "Baby Come On → samples → DJ Slugo - Juke Track", already_known: false },
+    ],
     influence: [],
   },
 };
