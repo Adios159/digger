@@ -234,6 +234,10 @@ async function renderSimilar() {
 
   list.innerHTML = ranked.map((r, i) => `
     <div class="result-row glass" onclick="openTrackModal(${r.track_id})">
+      <label class="row-select" title="플레이리스트에 담기" onclick="event.stopPropagation()">
+        <input type="checkbox" ${SELECTED_FOR_EXPORT.has(r.track_id) ? "checked" : ""}
+               onchange="toggleExportSelection(event, ${r.track_id})">
+      </label>
       <div class="result-rank">${i + 1}</div>
       <div class="track-art small">${initials(r.artist)}</div>
       <div class="result-main">
@@ -247,6 +251,82 @@ async function renderSimilar() {
       ${feedbackButtons(r.track_id, digMode ? "digging_zone" : "similar", seedId)}
     </div>
   `).join("");
+}
+
+/* ---------- Spotify 플레이리스트 내보내기 ---------- */
+
+/* 시드를 바꿔가며 고른 곡이 한 플레이리스트에 모이도록 선택은 목록을 다시 그려도,
+   시드를 바꿔도 유지한다. 관계 탐험 결과는 여기 못 담는다 — 그쪽 후보는 로컬
+   트랙이 아니라 외부 엔티티 이름이라 id로 정확히 지목할 수가 없다. */
+const SELECTED_FOR_EXPORT = new Set();
+
+function toggleExportSelection(event, trackId) {
+  event.stopPropagation();
+  if (event.currentTarget.checked) SELECTED_FOR_EXPORT.add(trackId);
+  else SELECTED_FOR_EXPORT.delete(trackId);
+  renderExportBar();
+}
+
+function renderExportBar() {
+  document.getElementById("export-count").textContent = SELECTED_FOR_EXPORT.size;
+  document.getElementById("export-bar").hidden = SELECTED_FOR_EXPORT.size === 0;
+}
+
+function clearExportSelection() {
+  SELECTED_FOR_EXPORT.clear();
+  renderExportBar();
+  document.querySelectorAll(".row-select input").forEach((box) => { box.checked = false; });
+}
+
+const exportQueryLabel = (query) => {
+  const track = trackById(Number(query));
+  return track ? `${track.artist} - ${track.title}` : query;
+};
+
+function renderExportResult(result) {
+  const el = document.getElementById("export-result");
+  const found = result.tracks.filter((t) => t.found);
+  const missing = result.tracks.filter((t) => !t.found);
+  el.hidden = false;
+  el.innerHTML = `
+    <div class="export-result-head">
+      <span><b>${found.length}곡</b> 추가됨${missing.length ? ` · <b class="export-warn">${missing.length}곡</b> 못 찾음` : ""}</span>
+      ${result.playlist_url ? `<a href="${result.playlist_url}" target="_blank" rel="noopener">Spotify에서 열기</a>` : ""}
+    </div>
+    ${missing.length ? `<p class="export-missing">Spotify에서 찾지 못함: ${missing.map((t) => exportQueryLabel(t.query)).join(", ")}</p>` : ""}
+  `;
+}
+
+async function exportPlaylist() {
+  const btn = document.getElementById("export-btn");
+  const nameInput = document.getElementById("playlist-name");
+  const name = nameInput.value.trim() || nameInput.placeholder;
+
+  btn.disabled = true;
+  btn.textContent = "내보내는 중...";
+  try {
+    // 백엔드(cli._find_local_track)는 숫자 문자열을 로컬 트랙 id로 바로 해석한다.
+    // 이름으로 보내면 LIKE 매칭이라 동명 트랙에서 모호해지므로 id로 보낸다.
+    const result = await postJSON("/playlists", {
+      name,
+      tracks: [...SELECTED_FOR_EXPORT].map(String),
+    });
+    renderExportResult(result);
+    showToast(`'${name}' 플레이리스트 생성됨`);
+    clearExportSelection();
+  } catch (err) {
+    showToast(`플레이리스트 내보내기 실패: ${err.message}`, "error");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Spotify로 내보내기";
+  }
+}
+
+function setupExportControls() {
+  const today = new Date().toLocaleDateString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" });
+  document.getElementById("playlist-name").placeholder = `digger 디깅 ${today}`;
+  document.getElementById("export-btn").addEventListener("click", exportPlaylist);
+  document.getElementById("export-clear").addEventListener("click", clearExportSelection);
 }
 
 /* ---------- 관계 탐험 탭 ---------- */
@@ -520,6 +600,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   renderLibrary();
   setupSimilarControls();
   setupRelationsControls();
+  setupExportControls();
   renderSimilar();
   renderRelations();
   renderBoredom();
