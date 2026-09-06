@@ -663,6 +663,86 @@ input[type="range"]::-moz-range-thumb {
   line-height: 1.6;
 }
 
+/* ---------- 피드백 ---------- */
+
+.feedback-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+.fb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border-soft);
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+
+.fb-btn svg { width: 15px; height: 15px; }
+.fb-skip svg { transform: rotate(180deg); }
+
+.fb-btn:hover { color: var(--text); border-color: var(--border); }
+
+.fb-like.active {
+  color: var(--green);
+  border-color: rgba(30,215,96,0.4);
+  background: var(--green-soft);
+}
+
+.fb-skip.active {
+  color: #e8768f;
+  border-color: rgba(232,118,143,0.4);
+  background: rgba(232,118,143,0.14);
+}
+
+.modal-section-label-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+
+.feedback-log-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 12.5px;
+}
+.feedback-log-row:last-child { border-bottom: none; }
+
+.fb-log-action { font-weight: 600; flex-shrink: 0; width: 46px; }
+.fb-log-like { color: var(--green); }
+.fb-log-skip { color: #e8768f; }
+.fb-log-context { color: var(--text-dim); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fb-log-time { color: var(--text-faint); font-size: 11px; flex-shrink: 0; }
+
+/* ---------- 토스트 ---------- */
+
+.toast-host {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.toast {
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  background: rgba(14, 26, 21, 0.94);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12.5px;
+  max-width: 340px;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.45);
+  animation: fade-in 0.2s ease;
+}
+
+.toast-error { border-color: rgba(232,118,143,0.45); color: #f0a6b6; }
+
 /* ---------- 반응형 ---------- */
 
 @media (max-width: 760px) {

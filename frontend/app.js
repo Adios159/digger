@@ -3,27 +3,52 @@
 
 let TRACKS = [];
 let BOREDOM = {};
+let FEEDBACK = [];
 
 const CATEGORY_LABELS = { collab: "협업", label: "레이블", samples: "샘플", influence: "영향" };
+const FEEDBACK_LOG_LIMIT = 200;
 
 const trackById = (id) => TRACKS.find((t) => t.id === id);
 
-async function fetchJSON(url) {
-  const res = await fetch(url);
+async function requestJSON(url, options) {
+  const res = await fetch(url, options);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `${url} 요청 실패 (${res.status})`);
+    // 422(검증 실패)의 detail은 문자열이 아니라 객체 배열이라 그대로 쓰면 [object Object]가 된다
+    const detail = body.detail;
+    throw new Error(typeof detail === "string" ? detail : `${url} 요청 실패 (${res.status})`);
   }
-  return res.json();
+  return res.status === 204 ? null : res.json();
 }
 
+const fetchJSON = (url) => requestJSON(url);
+const postJSON = (url, body) =>
+  requestJSON(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? null : JSON.stringify(body),
+  });
+
 async function loadInitialData() {
-  const [tracks, boredomList] = await Promise.all([
+  const [tracks, boredomList, feedback] = await Promise.all([
     fetchJSON("/tracks"),
     fetchJSON("/boredom?top=1000"),
+    fetchJSON(`/feedback?top=${FEEDBACK_LOG_LIMIT}`),
   ]);
   TRACKS = tracks;
   BOREDOM = Object.fromEntries(boredomList.map((b) => [b.track_id, b.boredom_score]));
+  FEEDBACK = feedback;
+}
+
+/* 결과 목록 전체를 다시 그리지 않고 알릴 것만 알린다 — 피드백 한 번에 유사도
+   재조회가 딸려오면 순위가 눈앞에서 바뀌어 오히려 방해가 된다. */
+function showToast(message, kind = "info") {
+  const host = document.getElementById("toast-host");
+  const el = document.createElement("div");
+  el.className = `toast toast-${kind}`;
+  el.textContent = message;
+  host.appendChild(el);
+  setTimeout(() => el.remove(), 4200);
 }
 
 function showAppError(err) {
@@ -78,6 +103,82 @@ function renderLibrary() {
       </div>
     </article>
   `).join("");
+}
+
+/* ---------- 좋아요/스킵 피드백 ---------- */
+
+/* 백엔드는 같은 트랙의 피드백을 덮어쓰지 않고 이벤트로 쌓는다(db.insert_feedback).
+   버튼은 "지금 이 트랙을 어떻게 평가해뒀나"를 보여주면 되므로 최신 한 건만 본다.
+   GET /feedback이 created_at 내림차순이라 처음 만나는 것이 최신이다. */
+const latestFeedbackFor = (trackId) => FEEDBACK.find((f) => f.track_id === trackId);
+
+const THUMB_PATH =
+  '<svg viewBox="0 0 24 24" fill="none"><path d="M7 21.5V10l4.6-7.5 1.1.5c.8.4 1.2 1.3 1 2.2L12.9 9.5h5.4a2 2 0 0 1 2 2.4l-1.4 7.6a2 2 0 0 1-2 1.6H7z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M7 10.5H3.5v11H7" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+
+function feedbackButtons(trackId, context, seedTrackId = null) {
+  const latest = latestFeedbackFor(trackId);
+  const seedArg = seedTrackId == null ? "null" : seedTrackId;
+  const button = (action, title) => `
+    <button class="fb-btn fb-${action} ${latest && latest.action === action ? "active" : ""}"
+            data-action="${action}" title="${title}"
+            onclick="onFeedback(event, ${trackId}, '${action}', '${context}', ${seedArg})">
+      ${THUMB_PATH}
+    </button>`;
+  return `<div class="feedback-actions">${button("like", "좋아요로 기록")}${button("skip", "스킵으로 기록")}</div>`;
+}
+
+function markFeedbackState(container, action) {
+  container.querySelectorAll(".fb-btn").forEach((b) => b.classList.toggle("active", b.dataset.action === action));
+}
+
+async function onFeedback(event, trackId, action, context, seedTrackId) {
+  event.stopPropagation(); // 결과 행 클릭(모달 열기)까지 같이 발동하지 않게
+  const container = event.currentTarget.closest(".feedback-actions");
+  try {
+    await postJSON("/feedback", {
+      track_id: trackId,
+      action,
+      context,
+      seed_track_id: seedTrackId,
+    });
+    FEEDBACK = await fetchJSON(`/feedback?top=${FEEDBACK_LOG_LIMIT}`);
+  } catch (err) {
+    showToast(`피드백 기록 실패: ${err.message}`, "error");
+    return;
+  }
+  markFeedbackState(container, action);
+  renderFeedbackHistory(trackId);
+  const track = trackById(trackId);
+  showToast(`${action === "like" ? "좋아요" : "스킵"} 기록됨 — ${track ? track.title : `id=${trackId}`}`);
+}
+
+function formatFeedbackTime(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" });
+}
+
+function feedbackHistoryHtml(trackId) {
+  const history = FEEDBACK.filter((f) => f.track_id === trackId);
+  if (history.length === 0) {
+    return `<p class="modal-empty-note">아직 기록된 피드백 없음</p>`;
+  }
+  return history
+    .slice(0, 5)
+    .map(
+      (f) => `
+      <div class="feedback-log-row">
+        <span class="fb-log-action fb-log-${f.action}">${f.action === "like" ? "좋아요" : "스킵"}</span>
+        <span class="fb-log-context">${f.context || "직접"}${f.seed_title ? ` · 시드 ${f.seed_artist} - ${f.seed_title}` : ""}</span>
+        <span class="fb-log-time">${formatFeedbackTime(f.created_at)}</span>
+      </div>`
+    )
+    .join("");
+}
+
+/* 모달이 열려 있고 그 트랙의 기록이 바뀐 경우에만 갱신한다. */
+function renderFeedbackHistory(trackId) {
+  const el = document.getElementById("modal-feedback-history");
+  if (el && Number(el.dataset.trackId) === trackId) el.innerHTML = feedbackHistoryHtml(trackId);
 }
 
 /* ---------- 탐색(Similar) 탭 ---------- */
@@ -143,6 +244,7 @@ async function renderSimilar() {
         <div class="similarity-bar"><div class="similarity-fill" style="width:${(r.similarity * 100).toFixed(0)}%"></div></div>
         <span class="similarity-val">${r.similarity.toFixed(3)}</span>
       </div>
+      ${feedbackButtons(r.track_id, digMode ? "digging_zone" : "similar", seedId)}
     </div>
   `).join("");
 }
@@ -291,6 +393,14 @@ async function renderTrackModal(track) {
     <div class="modal-section">
       <div class="modal-section-label">질림 스코어</div>
       <p class="modal-empty-note">${boredom != null ? `${boredom.toFixed(2)} · sync-listening 기반` : "청취 이력 없음"}</p>
+    </div>
+
+    <div class="modal-section">
+      <div class="modal-section-label modal-section-label-row">
+        <span>피드백</span>
+        ${feedbackButtons(track.id, "library")}
+      </div>
+      <div id="modal-feedback-history" data-track-id="${track.id}">${feedbackHistoryHtml(track.id)}</div>
     </div>
 
     <div class="modal-section">
