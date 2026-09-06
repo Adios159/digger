@@ -55,6 +55,17 @@ def _release_artist_key(release_title: str) -> str:
     return _match_key(release_title.split(" - ", 1)[0])
 
 
+def _is_same_track(tracklist_title: str, title_key: str) -> bool:
+    """트랙리스트의 곡이 우리가 찾는 곡인지 판단한다.
+
+    조회에는 꼬리표를 뗀 제목을 쓰는데(metadata/query.py) 릴리즈 트랙리스트에는
+    "Highest In The Room (feat. ROSALÍA)"처럼 붙어 있는 경우가 많아 완전 일치로는
+    놓친다. 접두 일치로 그 차이를 흡수한다.
+    """
+    track_key = _match_key(tracklist_title)
+    return bool(title_key) and track_key.startswith(title_key)
+
+
 def _release_has_track(release_id: int, artist: str, title: str) -> bool:
     """컴필레이션 후보의 트랙리스트에 우리 곡이 실제로 들어 있는지 확인한다.
 
@@ -64,7 +75,7 @@ def _release_has_track(release_id: int, artist: str, title: str) -> bool:
     detail = _request(f"releases/{release_id}", {})
     artist_key, title_key = _match_key(artist), _match_key(title)
     for track in detail.get("tracklist", []):
-        if _match_key(track.get("title", "")) != title_key:
+        if not _is_same_track(track.get("title", ""), title_key):
             continue
         track_artists = {_match_key(a.get("name", "")) for a in track.get("artists") or []}
         # 트랙별 아티스트를 안 적어둔 릴리즈도 있어 그 경우엔 제목 일치로 인정한다
@@ -111,7 +122,7 @@ def get_credits(release_id: int, title: str) -> list[dict[str, Any]]:
     credits = list(detail.get("extraartists") or [])
     title_key = _match_key(title)
     for track in detail.get("tracklist") or []:
-        if _match_key(track.get("title", "")) == title_key:
+        if _is_same_track(track.get("title", ""), title_key):
             credits += track.get("extraartists") or []
 
     seen = set()
