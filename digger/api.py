@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import cli as cli_module
@@ -278,3 +279,9 @@ def create_playlist_endpoint(body: PlaylistIn, conn: sqlite3.Connection = Depend
         "playlist_url": (playlist.get("external_urls") or {}).get("spotify", ""),
         "tracks": resolved,
     }
+
+
+# 프론트엔드(frontend/)를 같은 오리진에서 서빙 — 별도 CORS 설정 없이
+# `uvicorn digger.api:app` 하나로 UI+API가 함께 뜨게 한다. 위 API 라우트들보다
+# 뒤에 등록해야 "/tracks" 같은 경로가 정적 파일 매칭에 먼저 먹히지 않는다.
+app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")
