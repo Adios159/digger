@@ -13,7 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - CLI 진입점: `python -m digger.cli`
   - `analyze <디렉토리> [--db digger.db]`: 디렉토리 내 오디오 파일(.flac/.mp3/.wav)을 Essentia로 분석해 `tracks` 테이블에 upsert.
   - `enrich [--db digger.db]`: DB에 있는 모든 트랙에 대해 Discogs → Last.fm → MusicBrainz 순으로 태그를 조회해 `track_tags`에 upsert. 소스 하나가 실패해도 나머지는 계속 진행됨(개별 try/except).
-- API 서버(선택): `uvicorn digger.api:app --reload` — CLI와 같은 SQLite DB(`digger.db`)를 그대로 쓰는 두 번째 인터페이스. `/docs`에서 전체 엔드포인트 확인 가능.
+- API 서버: `uvicorn digger.api:app --reload` — CLI와 같은 SQLite DB(`digger.db`)를 그대로 쓰는 두 번째 인터페이스. `/docs`에서 전체 엔드포인트 확인 가능. `frontend/`가 같은 앱에 정적 파일로 마운트되어 있어서, 이 명령 하나로 `http://127.0.0.1:8000/`에서 UI+API가 함께 뜸(프론트엔드는 이제 이 서버가 떠 있어야 동작함 — mock-data.js 제거됨).
 - DB 파일(`digger.db`)과 원본 음원(`music/`)은 `.gitignore`에 포함되어 커밋 대상이 아님.
 
 ## 아키텍처

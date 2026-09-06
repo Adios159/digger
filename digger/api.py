@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import cli as cli_module
@@ -52,10 +53,26 @@ def _get_track_row(conn: sqlite3.Connection, track_id: int) -> tuple:
 
 @app.get("/tracks")
 def list_tracks(conn: sqlite3.Connection = Depends(get_db)) -> list[dict]:
-    rows = conn.execute(
-        f"SELECT {', '.join(TRACK_COLUMNS)} FROM tracks ORDER BY id"
-    ).fetchall()
-    return [dict(zip(TRACK_COLUMNS, row)) for row in rows]
+    """트랙 목록을 태그와 함께 반환한다(라이브러리 화면이 트랙마다 태그 칩을 보여줘야 해서)."""
+    rows = conn.execute(f"SELECT {', '.join(TRACK_COLUMNS)} FROM tracks ORDER BY id").fetchall()
+    tracks = [dict(zip(TRACK_COLUMNS, row)) for row in rows]
+
+    tags_by_track: dict[int, list[dict]] = {}
+    for track_id, source, tag_type, raw_tag, weight, canonical_style in conn.execute(
+        "SELECT track_id, source, tag_type, raw_tag, weight, canonical_style FROM track_tags"
+    ):
+        tags_by_track.setdefault(track_id, []).append(
+            {
+                "source": source,
+                "tag_type": tag_type,
+                "raw_tag": raw_tag,
+                "weight": weight,
+                "canonical_style": canonical_style,
+            }
+        )
+    for track in tracks:
+        track["tags"] = tags_by_track.get(track["id"], [])
+    return tracks
 
 
 @app.get("/tracks/{track_id}")
@@ -278,3 +295,9 @@ def create_playlist_endpoint(body: PlaylistIn, conn: sqlite3.Connection = Depend
         "playlist_url": (playlist.get("external_urls") or {}).get("spotify", ""),
         "tracks": resolved,
     }
+
+
+# 프론트엔드(frontend/)를 같은 오리진에서 서빙 — 별도 CORS 설정 없이
+# `uvicorn digger.api:app` 하나로 UI+API가 함께 뜨게 한다. 위 API 라우트들보다
+# 뒤에 등록해야 "/tracks" 같은 경로가 정적 파일 매칭에 먼저 먹히지 않는다.
+app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")

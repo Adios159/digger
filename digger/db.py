@@ -102,7 +102,9 @@ ON CONFLICT(file_path) DO UPDATE SET
 
 
 def connect(db_path: str) -> sqlite3.Connection:
-    conn = sqlite3.connect(db_path)
+    # check_same_thread=False: FastAPI(api.py)가 동기 의존성을 스레드풀에서 실행할 때
+    # 커넥션을 연 스레드와 닫는 스레드가 달라질 수 있어서 필요함(CLI는 단일 스레드라 무해).
+    conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.executescript(SCHEMA)
     _migrate(conn)
     conn.commit()
