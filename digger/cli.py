@@ -108,6 +108,16 @@ def _musicbrainz_tags(artist: str, title: str) -> list[dict]:
     ]
 
 
+# api.py가 폴링으로 읽어가는 enrich 진행 상태. enrich_tracks는 동기 호출로 남겨두고
+# (rate limit이 모듈 전역이라 병렬화 불가), 진행 상황만 이 전역에 남겨서 별도
+# GET /enrich/progress 요청이 그 사이에 읽어갈 수 있게 한다.
+ENRICH_PROGRESS: dict = {"running": False, "current": 0, "total": 0, "artist": None, "title": None}
+
+
+def get_enrich_progress() -> dict:
+    return dict(ENRICH_PROGRESS)
+
+
 def enrich_tracks(db_path: str = DEFAULT_DB_PATH) -> None:
     """DB의 모든 트랙에 대해 Last.fm/MusicBrainz/Discogs 태그를 조회해 적재한다."""
     conn = connect(db_path)
@@ -116,28 +126,33 @@ def enrich_tracks(db_path: str = DEFAULT_DB_PATH) -> None:
         print("DB에 트랙이 없음. 먼저 analyze를 실행할 것", file=sys.stderr)
         return
 
-    for i, (track_id, artist, title) in enumerate(rows, start=1):
-        print(f"[{i}/{len(rows)}] 태그 조회 중: {artist} - {title}")
-        if not artist:
-            print("    아티스트 정보 없음, 건너뜀", file=sys.stderr)
-            continue
-        tags: list[dict] = []
-        fetched_sources: list[str] = []
-        for label, fetch in (
-            ("discogs", _discogs_tags),
-            ("lastfm", _lastfm_tags),
-            ("musicbrainz", _musicbrainz_tags),
-        ):
-            try:
-                fetched = fetch(artist, title)
-                tags += fetched
-                fetched_sources.append(label)
-                print(f"    {label}: {len(fetched)}개 태그")
-            except Exception as e:
-                print(f"    {label} 조회 실패: {e}", file=sys.stderr)
+    ENRICH_PROGRESS.update(running=True, current=0, total=len(rows), artist=None, title=None)
+    try:
+        for i, (track_id, artist, title) in enumerate(rows, start=1):
+            ENRICH_PROGRESS.update(current=i, artist=artist, title=title)
+            print(f"[{i}/{len(rows)}] 태그 조회 중: {artist} - {title}")
+            if not artist:
+                print("    아티스트 정보 없음, 건너뜀", file=sys.stderr)
+                continue
+            tags: list[dict] = []
+            fetched_sources: list[str] = []
+            for label, fetch in (
+                ("discogs", _discogs_tags),
+                ("lastfm", _lastfm_tags),
+                ("musicbrainz", _musicbrainz_tags),
+            ):
+                try:
+                    fetched = fetch(artist, title)
+                    tags += fetched
+                    fetched_sources.append(label)
+                    print(f"    {label}: {len(fetched)}개 태그")
+                except Exception as e:
+                    print(f"    {label} 조회 실패: {e}", file=sys.stderr)
 
-        # 실패한 소스의 기존 태그는 건드리지 않고, 성공한 소스만 이번 결과로 교체
-        replace_track_tags(conn, track_id, fetched_sources, tags)
+            # 실패한 소스의 기존 태그는 건드리지 않고, 성공한 소스만 이번 결과로 교체
+            replace_track_tags(conn, track_id, fetched_sources, tags)
+    finally:
+        ENRICH_PROGRESS["running"] = False
     print(f"완료: {len(rows)}곡의 태그를 {db_path}에 저장함")
 
 

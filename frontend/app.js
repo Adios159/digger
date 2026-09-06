@@ -477,6 +477,11 @@ function renderPipelinePanel() {
         <div class="pipeline-title">${p.title}</div>
         <p class="pipeline-desc">${p.desc}</p>
         <div id="pipeline-status-${p.key}" class="pipeline-status">대기 중</div>
+        ${p.key === "enrich"
+          ? `<div class="pipeline-progress" id="pipeline-progress-${p.key}" hidden>
+               <div class="pipeline-progress-bar"></div>
+             </div>`
+          : ""}
       </div>
       <div class="pipeline-actions">
         ${p.input
@@ -514,6 +519,8 @@ async function reloadAllViews() {
   renderBoredom();
 }
 
+/* enrich는 /enrich 요청이 끝날 때까지 응답이 없는 동기 엔드포인트라, 진행률을 보려면
+   실행 중에 별도로 GET /enrich/progress를 폴링해야 한다(api.py의 ENRICH_PROGRESS 참고). */
 async function runPipeline(key) {
   if (pipelineRunning) return;
   const spec = PIPELINES.find((p) => p.key === key);
@@ -521,18 +528,43 @@ async function runPipeline(key) {
   const [url, body] = spec.request(inputEl ? inputEl.value.trim() : null);
 
   const status = document.getElementById(`pipeline-status-${key}`);
+  const progressEl = document.getElementById(`pipeline-progress-${key}`);
+  const progressBar = progressEl ? progressEl.querySelector(".pipeline-progress-bar") : null;
   const startedAt = Date.now();
   const elapsed = () => Math.round((Date.now() - startedAt) / 1000);
-  const tick = setInterval(() => { status.textContent = `실행 중... ${elapsed()}초 경과`; }, 1000);
+
+  const tickPlain = () => { status.textContent = `실행 중... ${elapsed()}초 경과`; };
+  const tickEnrichProgress = async () => {
+    try {
+      const p = await fetchJSON("/enrich/progress");
+      if (p.total > 0) {
+        const pct = Math.round((p.current / p.total) * 100);
+        progressBar.style.width = `${pct}%`;
+        const who = p.artist ? ` — ${p.artist}${p.title ? " - " + p.title : ""}` : "";
+        status.textContent = `${p.current}/${p.total}곡 처리 중 (${pct}%, ${elapsed()}초)${who}`;
+        return;
+      }
+    } catch { /* 폴링 한 번 실패는 무시하고 다음 틱에서 재시도 */ }
+    tickPlain();
+  };
+
+  if (progressEl) {
+    progressEl.hidden = false;
+    progressBar.style.width = "0%";
+  }
+  const poll = progressEl ? tickEnrichProgress : tickPlain;
+  const tick = setInterval(poll, 1000);
 
   pipelineRunning = true;
   setPipelineDisabled(true);
   status.textContent = "실행 중...";
   status.className = "pipeline-status running";
+  poll();
 
   try {
     await postJSON(url, body);
     clearInterval(tick);
+    if (progressBar) progressBar.style.width = "100%";
     status.textContent = `완료 (${elapsed()}초)`;
     status.className = "pipeline-status done";
     await reloadAllViews();
@@ -544,6 +576,7 @@ async function runPipeline(key) {
     showToast(`${spec.title} 실패: ${err.message}`, "error");
   } finally {
     clearInterval(tick);
+    if (progressEl) progressEl.hidden = true;
     pipelineRunning = false;
     setPipelineDisabled(false);
   }

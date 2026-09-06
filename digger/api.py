@@ -257,6 +257,16 @@ def trigger_enrich() -> dict:
     return {"status": "ok"}
 
 
+@app.get("/enrich/progress")
+def get_enrich_progress() -> dict:
+    """실행 중인 enrich의 진행 상태(현재/전체 곡 수, 처리 중인 곡)를 반환한다.
+
+    /enrich 요청이 끝날 때까지 응답하지 않는 동기 엔드포인트라, 프론트가 실행 중에
+    이 엔드포인트를 따로 폴링해 진행률을 그려야 한다.
+    """
+    return cli_module.get_enrich_progress()
+
+
 @app.post("/collect-relations")
 def trigger_collect_relations() -> dict:
     """DB의 모든 트랙에 MusicBrainz/Discogs 관계 데이터를 적재한다."""

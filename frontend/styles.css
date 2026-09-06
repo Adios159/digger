@@ -854,6 +854,22 @@ input[type="range"]::-moz-range-thumb {
 .pipeline-status.done { color: var(--green); }
 .pipeline-status.failed { color: #e8768f; }
 
+.pipeline-progress {
+  margin-top: 8px;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.pipeline-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--green);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
 .pipeline-actions { display: flex; align-items: flex-end; gap: 10px; flex-shrink: 0; }
 
 .pipeline-input { display: flex; flex-direction: column; gap: 6px; }
