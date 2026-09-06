@@ -43,6 +43,10 @@
         <svg viewBox="0 0 24 24" fill="none"><path d="M3 18h3v-6H3v6zM10.5 18h3V6h-3v12zM18 18h3v-10h-3v10z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
         질림 랭킹
       </button>
+      <button class="tab-btn" data-tab="pipeline" role="tab" aria-selected="false">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M12 3v11m0 0l-3.5-3.5M12 14l3.5-3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 16v3a2 2 0 002 2h12a2 2 0 002-2v-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        파이프라인
+      </button>
     </nav>
   </header>
 
@@ -184,6 +188,17 @@
         </div>
       </div>
       <div id="boredom-list" class="boredom-list glass"></div>
+    </section>
+
+    <!-- 파이프라인 -->
+    <section id="tab-pipeline" class="tab-panel">
+      <div class="panel-head">
+        <div>
+          <h1>파이프라인</h1>
+          <p class="panel-desc">CLI 서브커맨드와 같은 배치 작업을 서버에서 실행. 전부 동기 실행이라 끝날 때까지 기다려야 하고, 한 번에 하나만 돌린다.</p>
+        </div>
+      </div>
+      <div id="pipeline-list" class="pipeline-list"></div>
     </section>
 
   </main>

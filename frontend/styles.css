@@ -815,6 +815,70 @@ input[type="range"]::-moz-range-thumb {
 .fb-log-context { color: var(--text-dim); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fb-log-time { color: var(--text-faint); font-size: 11px; flex-shrink: 0; }
 
+/* ---------- 파이프라인 ---------- */
+
+.pipeline-list { display: flex; flex-direction: column; gap: 12px; }
+
+.pipeline-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 16px 20px;
+  flex-wrap: wrap;
+}
+
+.pipeline-main { min-width: 0; flex: 1; }
+
+.pipeline-title {
+  font-family: "Sora", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--green);
+}
+
+.pipeline-desc {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
+.pipeline-status {
+  margin-top: 8px;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+
+.pipeline-status.running { color: var(--green); }
+.pipeline-status.done { color: var(--green); }
+.pipeline-status.failed { color: #e8768f; }
+
+.pipeline-actions { display: flex; align-items: flex-end; gap: 10px; flex-shrink: 0; }
+
+.pipeline-input { display: flex; flex-direction: column; gap: 6px; }
+
+.pipeline-input span {
+  font-size: 11px;
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.pipeline-input input {
+  width: 130px;
+  background-color: #0e1a15;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 8px 12px;
+  font-size: 13px;
+  font-family: "Inter", sans-serif;
+  color-scheme: dark;
+}
+
+.pipeline-input input:focus { outline: none; border-color: var(--green); }
+
 /* ---------- 토스트 ---------- */
 
 .toast-host {
@@ -849,4 +913,6 @@ input[type="range"]::-moz-range-thumb {
   .controls { position: static; }
   .topbar { flex-direction: column; align-items: flex-start; }
   .similarity-meter, .boredom-meter { width: 96px; }
+  .pipeline-card { flex-direction: column; align-items: stretch; }
+  .pipeline-actions { justify-content: flex-end; }
 }

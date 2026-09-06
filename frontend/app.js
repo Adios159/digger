@@ -423,6 +423,132 @@ function renderBoredom() {
   `).join("");
 }
 
+/* ---------- 파이프라인 실행 탭 ---------- */
+
+/* api.py의 배치 트리거 엔드포인트들. 전부 동기라 응답이 올 때까지 요청이 열려 있고,
+   enrich/collect-relations는 외부 소스 rate limit(Discogs 1.1초, MusicBrainz 1초)
+   때문에 트랙 수에 비례해 몇 분씩 걸린다. 화면은 그 사실을 숨기지 않는다. */
+const PIPELINES = [
+  {
+    key: "analyze",
+    title: "analyze",
+    desc: "디렉토리 안의 .flac/.mp3/.wav를 Essentia로 분석해 tracks에 적재. 곡당 수 초.",
+    input: { label: "디렉토리", value: "music", type: "text" },
+    request: (v) => ["/analyze", { directory: v }],
+  },
+  {
+    key: "enrich",
+    title: "enrich",
+    desc: "모든 트랙에 Discogs → Last.fm → MusicBrainz 순으로 장르 태그를 조회해 적재. 소스별 rate limit 때문에 트랙 수에 비례해 오래 걸림.",
+    request: () => ["/enrich", undefined],
+  },
+  {
+    key: "collect-relations",
+    title: "collect-relations",
+    desc: "MusicBrainz/Discogs에서 협업·레이블·샘플·영향 관계를 모아 relations에 적재. 관계 탐험 탭이 이 데이터를 씀.",
+    request: () => ["/collect-relations", undefined],
+  },
+  {
+    key: "sync-listening",
+    title: "sync-listening",
+    desc: "Spotify 최근 재생/상위 청취곡을 동기화해 질림 스코어의 근거를 갱신. 최초 실행이면 서버 콘솔에서 브라우저 인증이 필요함.",
+    request: () => ["/sync-listening", undefined],
+  },
+  {
+    key: "import-liked",
+    title: "import-liked",
+    desc: "Spotify 좋아요 곡을 메타데이터만으로 tracks에 적재(bpm/key/energy는 비어 있음). 태그를 채우려면 이어서 enrich를 돌려야 함.",
+    input: { label: "최대 곡 수", value: "2000", type: "number" },
+    request: (v) => [`/import-liked?max_items=${encodeURIComponent(v)}`, undefined],
+  },
+];
+
+/* 동시에 두 개를 돌리지 않는다. 같은 SQLite 파일을 쓰는 데다, 외부 소스의 rate limit이
+   모듈 전역 _last_request_time으로 구현돼 있어(metadata/*.py) 병렬 실행하면 정책을 어긴다. */
+let pipelineRunning = false;
+
+const pipelineInputId = (key) => `pipeline-input-${key}`;
+
+function renderPipelinePanel() {
+  document.getElementById("pipeline-list").innerHTML = PIPELINES.map(
+    (p) => `
+    <div class="pipeline-card glass">
+      <div class="pipeline-main">
+        <div class="pipeline-title">${p.title}</div>
+        <p class="pipeline-desc">${p.desc}</p>
+        <div id="pipeline-status-${p.key}" class="pipeline-status">대기 중</div>
+      </div>
+      <div class="pipeline-actions">
+        ${p.input
+          ? `<label class="pipeline-input">
+               <span>${p.input.label}</span>
+               <input id="${pipelineInputId(p.key)}" type="${p.input.type}" value="${p.input.value}">
+             </label>`
+          : ""}
+        <button class="primary-btn pipeline-run" onclick="runPipeline('${p.key}')">실행</button>
+      </div>
+    </div>`
+  ).join("");
+}
+
+function setPipelineDisabled(disabled) {
+  document.querySelectorAll(".pipeline-run").forEach((b) => { b.disabled = disabled; });
+}
+
+/* 파이프라인이 DB를 바꿨으니 화면 데이터를 통째로 다시 읽는다.
+   시드 선택은 그 트랙이 아직 남아 있으면 유지한다 — 보던 자리를 잃지 않게. */
+async function reloadAllViews() {
+  const seedSelects = ["seed-select", "rel-seed-select"];
+  const previous = seedSelects.map((id) => document.getElementById(id).value);
+
+  await loadInitialData();
+
+  renderLibrary();
+  seedSelects.forEach((id, i) => {
+    const el = document.getElementById(id);
+    populateSeedSelect(el);
+    if (TRACKS.some((t) => String(t.id) === previous[i])) el.value = previous[i];
+  });
+  await renderSimilar();
+  await renderRelations();
+  renderBoredom();
+}
+
+async function runPipeline(key) {
+  if (pipelineRunning) return;
+  const spec = PIPELINES.find((p) => p.key === key);
+  const inputEl = spec.input ? document.getElementById(pipelineInputId(key)) : null;
+  const [url, body] = spec.request(inputEl ? inputEl.value.trim() : null);
+
+  const status = document.getElementById(`pipeline-status-${key}`);
+  const startedAt = Date.now();
+  const elapsed = () => Math.round((Date.now() - startedAt) / 1000);
+  const tick = setInterval(() => { status.textContent = `실행 중... ${elapsed()}초 경과`; }, 1000);
+
+  pipelineRunning = true;
+  setPipelineDisabled(true);
+  status.textContent = "실행 중...";
+  status.className = "pipeline-status running";
+
+  try {
+    await postJSON(url, body);
+    clearInterval(tick);
+    status.textContent = `완료 (${elapsed()}초)`;
+    status.className = "pipeline-status done";
+    await reloadAllViews();
+    showToast(`${spec.title} 완료 — 화면 데이터 새로고침됨`);
+  } catch (err) {
+    clearInterval(tick);
+    status.textContent = `실패: ${err.message}`;
+    status.className = "pipeline-status failed";
+    showToast(`${spec.title} 실패: ${err.message}`, "error");
+  } finally {
+    clearInterval(tick);
+    pipelineRunning = false;
+    setPipelineDisabled(false);
+  }
+}
+
 /* ---------- 트랙 상세 모달 ---------- */
 
 async function renderTrackModal(track) {
@@ -601,6 +727,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupSimilarControls();
   setupRelationsControls();
   setupExportControls();
+  renderPipelinePanel();
   renderSimilar();
   renderRelations();
   renderBoredom();
