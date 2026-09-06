@@ -88,7 +88,7 @@ function renderLibrary() {
   document.getElementById("track-count").textContent = MOCK_TRACKS.length;
   const grid = document.getElementById("library-grid");
   grid.innerHTML = MOCK_TRACKS.map((t) => `
-    <article class="track-card glass">
+    <article class="track-card glass" onclick="openTrackModal(${t.id})">
       <div class="track-art">${initials(t.artist)}</div>
       <div class="track-body">
         <h3 class="track-title">${t.title}</h3>
@@ -118,6 +118,7 @@ function populateSeedSelect(selectEl) {
 }
 
 function renderSeedBanner(el, track, extra = "") {
+  el.onclick = () => openTrackModal(track.id);
   el.innerHTML = `
     <div class="track-art small">${initials(track.artist)}</div>
     <div>
@@ -150,7 +151,7 @@ function renderSimilar() {
   }
 
   list.innerHTML = ranked.map((r, i) => `
-    <div class="result-row glass">
+    <div class="result-row glass" onclick="openTrackModal(${r.track.id})">
       <div class="result-rank">${i + 1}</div>
       <div class="track-art small">${initials(r.track.artist)}</div>
       <div class="result-main">
@@ -213,7 +214,7 @@ function renderBoredom() {
 
   const list = document.getElementById("boredom-list");
   list.innerHTML = ranked.map((r, i) => `
-    <div class="boredom-row">
+    <div class="boredom-row" onclick="openTrackModal(${r.track.id})">
       <div class="result-rank">${i + 1}</div>
       <div class="track-art small">${initials(r.track.artist)}</div>
       <div class="result-main">
@@ -225,6 +226,83 @@ function renderBoredom() {
       </div>
     </div>
   `).join("");
+}
+
+/* ---------- 트랙 상세 모달 ---------- */
+
+const CATEGORY_LABELS = { collab: "협업", label: "레이블", samples: "샘플", influence: "영향" };
+
+function renderTrackModal(track) {
+  const boredom = MOCK_BOREDOM_SCORES[track.id];
+  const relations = MOCK_RELATIONS[track.id];
+
+  const tagsHtml = track.tags.map((tag) => `
+    <div class="tag-detail-row">
+      <span class="tag-dot tag-dot-${tag.source}"></span>
+      <span class="tag-detail-source">${tag.source}</span>
+      <span class="tag-detail-name">${tag.canonical_style || tag.raw_tag}</span>
+      <span class="tag-detail-weight">weight ${tag.weight ?? "-"}</span>
+    </div>
+  `).join("");
+
+  const relationsHtml = relations
+    ? Object.entries(CATEGORY_LABELS).map(([key, label]) => `
+        <div class="modal-relation-row"><span>${label}</span><b>${(relations[key] || []).length}건</b></div>
+      `).join("")
+    : `<p class="modal-empty-note">관계 데이터 없음 — collect-relations를 먼저 실행해야 함</p>`;
+
+  return `
+    <div class="modal-header">
+      <div class="track-art">${initials(track.artist)}</div>
+      <div>
+        <div class="modal-title">${track.artist} - ${track.title}</div>
+        <div class="modal-subtitle">${track.album}</div>
+      </div>
+    </div>
+
+    <div class="track-stats">
+      <span class="stat-chip">${track.bpm.toFixed(1)} BPM</span>
+      <span class="stat-chip">${track.key} ${track.key_scale}</span>
+      <span class="stat-chip">energy ${track.energy.toFixed(2)}</span>
+      <span class="stat-chip">${formatDuration(track.duration_sec)}</span>
+    </div>
+
+    <div class="modal-section">
+      <div class="modal-section-label">장르 태그 (${track.tags.length})</div>
+      ${tagsHtml}
+    </div>
+
+    <div class="modal-section">
+      <div class="modal-section-label">질림 스코어</div>
+      <p class="modal-empty-note">${boredom != null ? `${boredom.toFixed(2)} · sync-listening 기반` : "청취 이력 없음"}</p>
+    </div>
+
+    <div class="modal-section">
+      <div class="modal-section-label">관계 그래프</div>
+      ${relationsHtml}
+    </div>
+  `;
+}
+
+function openTrackModal(trackId) {
+  const track = trackById(trackId);
+  if (!track) return;
+  document.getElementById("modal-body").innerHTML = renderTrackModal(track);
+  document.getElementById("track-modal-overlay").hidden = false;
+}
+
+function closeTrackModal() {
+  document.getElementById("track-modal-overlay").hidden = true;
+}
+
+function setupModal() {
+  document.getElementById("modal-close").addEventListener("click", closeTrackModal);
+  document.getElementById("track-modal-overlay").addEventListener("click", (e) => {
+    if (e.target.id === "track-modal-overlay") closeTrackModal();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeTrackModal();
+  });
 }
 
 /* ---------- 탭 전환 ---------- */
@@ -302,6 +380,7 @@ function setupRelationsControls() {
 
 document.addEventListener("DOMContentLoaded", () => {
   setupTabs();
+  setupModal();
   renderLibrary();
   setupSimilarControls();
   setupRelationsControls();
