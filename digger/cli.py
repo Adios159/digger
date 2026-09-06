@@ -11,6 +11,7 @@ from .analysis import analyze_track
 from .boredom import compute_boredom_scores
 from .db import (
     connect,
+    insert_feedback,
     replace_top_tracks,
     update_track_mbid,
     upsert_listening_history,
@@ -523,6 +524,58 @@ def dig_relations_command(
         print(f"{rank}. {r['entity_name']}{known_mark}{boredom_note} — {r['path']}")
 
 
+FEEDBACK_ACTIONS = ["like", "skip"]
+
+
+def feedback_command(
+    track: str,
+    action: str,
+    seed: str | None = None,
+    context: str | None = None,
+    db_path: str = DEFAULT_DB_PATH,
+) -> None:
+    """트랙 하나에 대한 좋아요/스킵 피드백을 기록한다."""
+    conn = connect(db_path)
+    track_id = _resolve_seed_track_id(conn, track)
+    if track_id is None:
+        return
+
+    seed_track_id = None
+    if seed is not None:
+        seed_track_id = _resolve_seed_track_id(conn, seed)
+        if seed_track_id is None:
+            return
+
+    insert_feedback(conn, track_id, action, context=context, seed_track_id=seed_track_id)
+
+    artist, title = conn.execute("SELECT artist, title FROM tracks WHERE id = ?", (track_id,)).fetchone()
+    print(f"기록됨: {artist} - {title} ({action})")
+
+
+def feedback_log(top_n: int = 20, db_path: str = DEFAULT_DB_PATH) -> None:
+    """최근 기록된 피드백을 최신순으로 출력한다."""
+    conn = connect(db_path)
+    rows = conn.execute(
+        """
+        SELECT f.created_at, t.artist, t.title, f.action, f.context, s.artist, s.title
+        FROM feedback f
+        JOIN tracks t ON t.id = f.track_id
+        LEFT JOIN tracks s ON s.id = f.seed_track_id
+        ORDER BY f.created_at DESC
+        LIMIT ?
+        """,
+        (top_n,),
+    ).fetchall()
+    if not rows:
+        print("기록된 피드백이 없음. 먼저 feedback을 실행할 것", file=sys.stderr)
+        return
+
+    for created_at, artist, title, action, context, seed_artist, seed_title in rows:
+        seed_note = f", 시드={seed_artist} - {seed_title}" if seed_artist else ""
+        context_note = f", 컨텍스트={context}" if context else ""
+        print(f"[{created_at}] {artist} - {title}: {action}{seed_note}{context_note}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="digger")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -592,6 +645,19 @@ def main() -> None:
         help="이미 아는 곡/아티스트 중 이 질림 스코어를 넘는 결과는 제외 (--include-known과 독립적으로 적용)",
     )
 
+    feedback_parser = subparsers.add_parser("feedback", help="트랙에 대한 좋아요/스킵 피드백 기록")
+    feedback_parser.add_argument("track", help="피드백을 남길 트랙의 id 또는 아티스트/제목 일부")
+    feedback_parser.add_argument("--action", choices=FEEDBACK_ACTIONS, required=True)
+    feedback_parser.add_argument("--seed", default=None, help="이 추천을 이끌어낸 시드 트랙의 id 또는 아티스트/제목 일부")
+    feedback_parser.add_argument(
+        "--context", default=None, help="어떤 흐름에서 나온 추천인지(예: similar, dig-relations, manual)"
+    )
+    feedback_parser.add_argument("--db", default=DEFAULT_DB_PATH)
+
+    feedback_log_parser = subparsers.add_parser("feedback-log", help="최근 기록된 피드백을 최신순으로 출력")
+    feedback_log_parser.add_argument("--top", type=int, default=20, dest="top_n")
+    feedback_log_parser.add_argument("--db", default=DEFAULT_DB_PATH)
+
     args = parser.parse_args()
 
     if args.command == "analyze":
@@ -619,6 +685,10 @@ def main() -> None:
         dig_relations_command(
             args.seed, args.category, args.top_n, args.db, args.include_known, args.exclude_tired_above
         )
+    elif args.command == "feedback":
+        feedback_command(args.track, args.action, args.seed, args.context, args.db)
+    elif args.command == "feedback-log":
+        feedback_log(args.top_n, args.db)
 
 
 if __name__ == "__main__":
