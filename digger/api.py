@@ -257,6 +257,13 @@ def trigger_sync_listening() -> dict:
     return {"status": "ok"}
 
 
+@app.post("/import-liked")
+def trigger_import_liked(max_items: int = 2000) -> dict:
+    """Spotify 좋아요 곡을 tracks에 적재한다(음향 특성 없이 메타데이터만)."""
+    cli_module.import_liked_songs(DEFAULT_DB_PATH, max_items)
+    return {"status": "ok"}
+
+
 class PlaylistIn(BaseModel):
     name: str
     tracks: list[str]
