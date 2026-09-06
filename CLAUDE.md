@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 프로젝트 개요
 
-내가 실제로 좋아하는 곡의 음향적·맥락적 특성을 분석해 아직 모르는 인접곡/아티스트를 찾아주는 개인용 음악 디깅 도구. 현재는 Python CLI 프로토타입 단계이며, 검증되면 FastAPI 기반 정식 백엔드로 확장할 계획이다 (자세한 배경은 `AI_음악_디깅_앱_기획서 (1).md` 참고).
+내가 실제로 좋아하는 곡의 음향적·맥락적 특성을 분석해 아직 모르는 인접곡/아티스트를 찾아주는 개인용 음악 디깅 도구. Python CLI 프로토타입에 FastAPI 레이어(`digger/api.py`)를 얹은 단계이며, DB는 아직 SQLite를 그대로 씀 — 데이터 규모가 실제로 커지면 PostgreSQL(+pgvector)로 옮겨갈 계획이다 (자세한 배경은 `AI_음악_디깅_앱_기획서 (1).md` 참고).
 
 ## 실행 환경 / 명령어
 
@@ -13,6 +13,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - CLI 진입점: `python -m digger.cli`
   - `analyze <디렉토리> [--db digger.db]`: 디렉토리 내 오디오 파일(.flac/.mp3/.wav)을 Essentia로 분석해 `tracks` 테이블에 upsert.
   - `enrich [--db digger.db]`: DB에 있는 모든 트랙에 대해 Discogs → Last.fm → MusicBrainz 순으로 태그를 조회해 `track_tags`에 upsert. 소스 하나가 실패해도 나머지는 계속 진행됨(개별 try/except).
+- API 서버(선택): `uvicorn digger.api:app --reload` — CLI와 같은 SQLite DB(`digger.db`)를 그대로 쓰는 두 번째 인터페이스. `/docs`에서 전체 엔드포인트 확인 가능.
 - DB 파일(`digger.db`)과 원본 음원(`music/`)은 `.gitignore`에 포함되어 커밋 대상이 아님.
 
 ## 아키텍처
@@ -25,6 +26,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - Discogs는 릴리즈 검색 결과에 공식 `genre`/`style` 필드가 바로 포함되어 있어 크로스워크 없이 canonical 태그로 사용 가능. `artist`/`track` 필드로 엄격 검색하면 컴필레이션(릴리즈 아티스트가 "Various")을 놓치므로 통합 텍스트 쿼리(`q`)를 사용함.
   - Last.fm/MusicBrainz는 자유형(folksonomy) 태그라 `digger/crosswalk.py` + `digger/data/tag_crosswalk.yaml`로 canonical style에 정규화. 매핑이 없는 태그는 `canonical_style=NULL`로 정직하게 남겨두고, `enrich` 실행 결과를 보며 점진적으로 YAML을 채워나가는 방식(전체를 미리 큐레이션하지 않음).
 - `digger/cli.py`: 위 모듈들을 엮는 argparse 기반 서브커맨드. 새 메타데이터 소스를 추가하려면 `_xxx_tags()` 헬퍼를 만들고 `enrich_tracks()`의 `(label, fetch)` 튜플 목록에 추가하면 됨.
+- `digger/api.py`: CLI와 같은 SQLite DB를 그대로 쓰는 FastAPI 레이어. cli.py는 print 중심이라 그대로 재사용하지 않고 db.py/similarity.py/graph.py/boredom.py 등 저수준 함수를 직접 호출해 JSON으로 반환함(단, analyze/enrich/collect-relations/sync-listening 같은 배치 파이프라인은 예외적으로 cli.py 함수를 그대로 호출). CLI를 대체하는 게 아니라 나란히 쓰는 두 번째 인터페이스.
 
 ## 협업 워크플로 (필수 준수)
 
