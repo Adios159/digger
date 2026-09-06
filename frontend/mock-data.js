@@ -176,6 +176,92 @@ const MOCK_TRACKS = [
       { source: "lastfm", raw_tag: "gospel", canonical_style: "gospel", weight: 1 },
     ],
   },
+  {
+    id: 21, artist: "My Bloody Valentine", title: "Only Shallow", album: "Loveless",
+    bpm: 88.0, key: "E", key_scale: "major", energy: 0.7, duration_sec: 402,
+    tags: [
+      { source: "discogs", raw_tag: "Shoegaze", canonical_style: "shoegaze", weight: 3 },
+      { source: "lastfm", raw_tag: "noise pop", canonical_style: "noise-pop", weight: 1 },
+      { source: "lastfm", raw_tag: "alternative rock", canonical_style: "alt-rock", weight: 1 },
+    ],
+  },
+  {
+    id: 22, artist: "Zapp", title: "More Bounce to the Ounce", album: "Zapp",
+    bpm: 108.0, key: "F", key_scale: "major", energy: 0.78, duration_sec: 313,
+    tags: [
+      { source: "discogs", raw_tag: "Boogie", canonical_style: "boogie", weight: 3 },
+      { source: "musicbrainz", raw_tag: "funk", canonical_style: "funk", weight: 2 },
+      { source: "lastfm", raw_tag: "electro", canonical_style: "electro", weight: 1 },
+    ],
+  },
+  {
+    id: 23, artist: "Macintosh Plus", title: "リサフランク420 / 現代のコンピュー", album: "Floral Shoppe",
+    bpm: 65.0, key: "A", key_scale: "major", energy: 0.2, duration_sec: 315,
+    tags: [
+      { source: "discogs", raw_tag: "Vaporwave", canonical_style: "vaporwave", weight: 3 },
+      { source: "lastfm", raw_tag: "ambient", canonical_style: "ambient", weight: 1 },
+    ],
+  },
+  {
+    id: 24, artist: "Aphex Twin", title: "Xtal", album: "Selected Ambient Works 85-92",
+    bpm: 100.0, key: "C", key_scale: "major", energy: 0.45, duration_sec: 293,
+    tags: [
+      { source: "discogs", raw_tag: "IDM", canonical_style: "idm", weight: 3 },
+      { source: "lastfm", raw_tag: "electronic", canonical_style: "electronic", weight: 2 },
+      { source: "lastfm", raw_tag: "ambient", canonical_style: "ambient", weight: 1 },
+    ],
+  },
+  {
+    id: 25, artist: "Sister Nancy", title: "Bam Bam", album: "One, Two",
+    bpm: 90.0, key: "G", key_scale: "major", energy: 0.62, duration_sec: 254,
+    tags: [
+      { source: "discogs", raw_tag: "Dancehall", canonical_style: "dancehall", weight: 3 },
+      { source: "lastfm", raw_tag: "reggae", canonical_style: "reggae", weight: 2 },
+    ],
+  },
+  {
+    id: 26, artist: "Ebo Taylor", title: "Love and Death", album: "Love and Death",
+    bpm: 112.0, key: "D", key_scale: "minor", energy: 0.68, duration_sec: 330,
+    tags: [
+      { source: "discogs", raw_tag: "Highlife", canonical_style: "highlife", weight: 3 },
+      { source: "musicbrainz", raw_tag: "afrobeat", canonical_style: "afrobeat", weight: 1 },
+      { source: "lastfm", raw_tag: "funk", canonical_style: "funk", weight: 1 },
+    ],
+  },
+  {
+    id: 27, artist: "Fad Gadget", title: "Back to Nature", album: "Fireside Favourites",
+    bpm: 118.0, key: "A", key_scale: "minor", energy: 0.5, duration_sec: 240,
+    tags: [
+      { source: "discogs", raw_tag: "Minimal Wave", canonical_style: "minimal-wave", weight: 3 },
+      { source: "lastfm", raw_tag: "synth-pop", canonical_style: "synth-pop", weight: 1 },
+      { source: "lastfm", raw_tag: "post-punk", canonical_style: "post-punk", weight: 1 },
+    ],
+  },
+  {
+    id: 28, artist: "Don Caballero", title: "Delivering the Groceries at 138 Beats Per Minute", album: "What Burns Never Returns",
+    bpm: 138.0, key: "E", key_scale: "major", energy: 0.8, duration_sec: 320,
+    tags: [
+      { source: "discogs", raw_tag: "Math Rock", canonical_style: "math-rock", weight: 3 },
+      { source: "lastfm", raw_tag: "post-rock", canonical_style: "post-rock", weight: 1 },
+    ],
+  },
+  {
+    id: 29, artist: "Babes Wodumo", title: "Wololo", album: "Gqom Queen",
+    bpm: 132.0, key: "C", key_scale: "minor", energy: 0.7, duration_sec: 260,
+    tags: [
+      { source: "discogs", raw_tag: "Gqom", canonical_style: "gqom", weight: 3 },
+      { source: "lastfm", raw_tag: "electronic", canonical_style: "electronic", weight: 1 },
+      { source: "lastfm", raw_tag: "house", canonical_style: "house", weight: 1 },
+    ],
+  },
+  {
+    id: 30, artist: "MC Marcinho", title: "Rap da Felicidade", album: "Rap da Felicidade",
+    bpm: 130.0, key: "G", key_scale: "minor", energy: 0.75, duration_sec: 265,
+    tags: [
+      { source: "discogs", raw_tag: "Funk Carioca", canonical_style: "funk-carioca", weight: 3 },
+      { source: "lastfm", raw_tag: "electronic", canonical_style: "electronic", weight: 1 },
+    ],
+  },
 ];
 
 // sync-listening + boredom 명령 결과를 흉내 낸 질림 스코어 (트랙 id -> score)
@@ -184,6 +270,8 @@ const MOCK_BOREDOM_SCORES = {
   6: 3.0, 7: 0.6, 8: 0.2, 9: 1.0, 10: 3.8,
   11: 1.8, 12: 2.6, 13: 0.5, 14: 3.3, 15: 0.1,
   16: 1.2, 17: 4.5, 18: 0.4, 19: 2.9, 20: 0.7,
+  21: 1.1, 22: 2.4, 23: 0.05, 24: 1.9, 25: 0.9,
+  26: 0.3, 27: 0.15, 28: 2.0, 29: 3.6, 30: 1.4,
 };
 
 // collect-relations 결과를 흉내 낸 관계 그래프. mb_recording_id가 없는 트랙(관계 미수집)도
@@ -276,6 +364,32 @@ const MOCK_RELATIONS = {
     samples: [
       { entity_name: "DJ Slugo - Juke Track", path: "Baby Come On → samples → DJ Slugo - Juke Track", already_known: false },
     ],
+    influence: [],
+  },
+  22: {
+    collab: [
+      { entity_name: "Roger Troutman", path: "More Bounce to the Ounce → vocals(talk box) → Roger Troutman", already_known: true },
+    ],
+    label: [
+      { entity_name: "Warner Bros. Records", path: "More Bounce to the Ounce → released_on_label → Warner Bros. Records", already_known: false },
+    ],
+    samples: [],
+    influence: [],
+  },
+  25: {
+    collab: [],
+    label: [
+      { entity_name: "Techniques Records", path: "Bam Bam → released_on_label → Techniques Records", already_known: false },
+    ],
+    samples: [],
+    influence: [],
+  },
+  29: {
+    collab: [
+      { entity_name: "Mampintsha", path: "Wololo → production → Mampintsha", already_known: false },
+    ],
+    label: [],
+    samples: [],
     influence: [],
   },
 };
