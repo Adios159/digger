@@ -272,10 +272,19 @@ def get_enrich_progress() -> dict:
 
 
 @app.post("/collect-relations")
-def trigger_collect_relations() -> dict:
-    """DB의 모든 트랙에 MusicBrainz/Discogs 관계 데이터를 적재한다."""
-    cli_module.collect_relations(DEFAULT_DB_PATH)
+def trigger_collect_relations(force: bool = False) -> dict:
+    """트랙에 MusicBrainz/Discogs 관계 데이터를 적재한다.
+
+    기본은 이전에 관계 조회가 성공한 트랙을 건너뛴다(cli.collect_relations 참고).
+    """
+    cli_module.collect_relations(DEFAULT_DB_PATH, force=force)
     return {"status": "ok"}
+
+
+@app.get("/collect-relations/progress")
+def get_collect_relations_progress() -> dict:
+    """실행 중인 collect-relations의 진행 상태를 반환한다(GET /enrich/progress와 같은 이유)."""
+    return cli_module.get_relations_progress()
 
 
 @app.post("/sync-listening")
@@ -283,6 +292,12 @@ def trigger_sync_listening() -> dict:
     """Spotify 최근 재생/상위 청취곡을 동기화한다(최초 호출 시 서버 콘솔에서 브라우저 인증 필요)."""
     cli_module.sync_listening_history(DEFAULT_DB_PATH)
     return {"status": "ok"}
+
+
+@app.get("/sync-listening/progress")
+def get_sync_listening_progress() -> dict:
+    """실행 중인 sync-listening의 진행 상태(4단계 중 현재 단계)를 반환한다."""
+    return cli_module.get_sync_listening_progress()
 
 
 @app.post("/import-liked")

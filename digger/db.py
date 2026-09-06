@@ -127,6 +127,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tracks ADD COLUMN enriched_at TEXT")
         columns.add("enriched_at")
 
+    if "relations_collected_at" not in columns:
+        conn.execute("ALTER TABLE tracks ADD COLUMN relations_collected_at TEXT")
+        columns.add("relations_collected_at")
+
     if "spotify_track_id" not in columns:
         _rebuild_tracks_for_non_local_sources(conn)
 
@@ -155,15 +159,18 @@ def _rebuild_tracks_for_non_local_sources(conn: sqlite3.Connection) -> None:
             raw_features TEXT,
             analyzed_at TEXT NOT NULL,
             mb_recording_id TEXT,
-            enriched_at TEXT
+            enriched_at TEXT,
+            relations_collected_at TEXT
         );
 
         INSERT INTO tracks_migrated (
             id, file_path, artist, title, album, bpm, key, key_scale, energy,
-            duration_sec, raw_features, analyzed_at, mb_recording_id, enriched_at
+            duration_sec, raw_features, analyzed_at, mb_recording_id, enriched_at,
+            relations_collected_at
         )
         SELECT id, file_path, artist, title, album, bpm, key, key_scale, energy,
-               duration_sec, raw_features, analyzed_at, mb_recording_id, enriched_at
+               duration_sec, raw_features, analyzed_at, mb_recording_id, enriched_at,
+               relations_collected_at
         FROM tracks;
 
         DROP TABLE tracks;
@@ -355,6 +362,15 @@ def mark_track_enriched(conn: sqlite3.Connection, track_id: int) -> None:
     """
     conn.execute(
         "UPDATE tracks SET enriched_at = ? WHERE id = ?",
+        (datetime.now(timezone.utc).isoformat(), track_id),
+    )
+    conn.commit()
+
+
+def mark_track_relations_collected(conn: sqlite3.Connection, track_id: int) -> None:
+    """collect-relations에서 관계 조회에 성공한 트랙을 표시한다(mark_track_enriched와 같은 이유)."""
+    conn.execute(
+        "UPDATE tracks SET relations_collected_at = ? WHERE id = ?",
         (datetime.now(timezone.utc).isoformat(), track_id),
     )
     conn.commit()
