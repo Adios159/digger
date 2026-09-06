@@ -10,11 +10,13 @@ Postgres 이관은 과함. CLI와 나란히 쓰는 두 번째 인터페이스로
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
+from . import cli as cli_module
 from .boredom import compute_boredom_scores
 from .db import connect, insert_feedback
 from .graph import dig_relations
@@ -201,3 +203,37 @@ def get_feedback_log(top: int = 20, conn: sqlite3.Connection = Depends(get_db)) 
         }
         for r in rows
     ]
+
+
+class AnalyzeIn(BaseModel):
+    directory: str
+
+
+@app.post("/analyze")
+def trigger_analyze(body: AnalyzeIn) -> dict:
+    """디렉토리 내 오디오 파일을 분석해 DB에 적재한다(cli.py의 analyze와 동일한 로직 재사용)."""
+    if not Path(body.directory).is_dir():
+        raise HTTPException(status_code=400, detail=f"디렉토리를 찾을 수 없음: {body.directory}")
+    cli_module.analyze_directory(body.directory, DEFAULT_DB_PATH)
+    return {"status": "ok"}
+
+
+@app.post("/enrich")
+def trigger_enrich() -> dict:
+    """DB의 모든 트랙에 Last.fm/MusicBrainz/Discogs 태그를 적재한다."""
+    cli_module.enrich_tracks(DEFAULT_DB_PATH)
+    return {"status": "ok"}
+
+
+@app.post("/collect-relations")
+def trigger_collect_relations() -> dict:
+    """DB의 모든 트랙에 MusicBrainz/Discogs 관계 데이터를 적재한다."""
+    cli_module.collect_relations(DEFAULT_DB_PATH)
+    return {"status": "ok"}
+
+
+@app.post("/sync-listening")
+def trigger_sync_listening() -> dict:
+    """Spotify 최근 재생/상위 청취곡을 동기화한다(최초 호출 시 서버 콘솔에서 브라우저 인증 필요)."""
+    cli_module.sync_listening_history(DEFAULT_DB_PATH)
+    return {"status": "ok"}
