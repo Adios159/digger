@@ -21,7 +21,7 @@ from .. import config
 AUTH_URL = "https://accounts.spotify.com/authorize"
 TOKEN_URL = "https://accounts.spotify.com/api/token"
 API_BASE_URL = "https://api.spotify.com/v1"
-SCOPES = "user-read-recently-played user-top-read"
+SCOPES = "user-read-recently-played user-top-read playlist-modify-private"
 TOKEN_CACHE_PATH = Path(".spotify_token.json")
 
 # Spotify는 Discogs/MusicBrainz와 달리 고정 요청 간격이 아니라 429 + Retry-After
@@ -163,6 +163,48 @@ def _request(path: str, params: dict[str, Any]) -> dict[str, Any]:
         response.raise_for_status()
         return response.json()
     raise RuntimeError("Spotify API 요청이 재시도 후에도 실패함(429)")
+
+
+def _post(path: str, json_body: dict[str, Any]) -> dict[str, Any]:
+    for attempt in range(_MAX_RETRIES):
+        response = requests.post(
+            f"{API_BASE_URL}/{path}",
+            json=json_body,
+            headers={"Authorization": f"Bearer {get_access_token()}"},
+            timeout=10,
+        )
+        if response.status_code == 429 and attempt < _MAX_RETRIES - 1:
+            time.sleep(int(response.headers.get("Retry-After", "1")))
+            continue
+        response.raise_for_status()
+        return response.json() if response.content else {}
+    raise RuntimeError("Spotify API 요청이 재시도 후에도 실패함(429)")
+
+
+def search_track(artist: str, title: str) -> dict[str, Any] | None:
+    """아티스트+제목으로 트랙을 검색해 첫 결과를 반환한다(없으면 None)."""
+    data = _request("search", {"q": f"track:{title} artist:{artist}", "type": "track", "limit": 1})
+    items = (data.get("tracks") or {}).get("items") or []
+    return items[0] if items else None
+
+
+def get_current_user_id() -> str:
+    return _request("me", {})["id"]
+
+
+def create_playlist(user_id: str, name: str, description: str = "") -> dict[str, Any]:
+    """비공개 플레이리스트를 새로 만든다."""
+    return _post(
+        f"users/{user_id}/playlists",
+        {"name": name, "description": description, "public": False},
+    )
+
+
+def add_tracks(playlist_id: str, uris: list[str]) -> None:
+    """플레이리스트에 트랙을 추가한다(한 번에 최대 100개, 개인 규모라 페이지네이션은 생략)."""
+    if not uris:
+        return
+    _post(f"playlists/{playlist_id}/tracks", {"uris": uris})
 
 
 def get_recently_played(limit: int = 50, max_items: int = 200) -> list[dict[str, Any]]:
