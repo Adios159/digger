@@ -524,6 +524,92 @@ def dig_relations_command(
         print(f"{rank}. {r['entity_name']}{known_mark}{boredom_note} — {r['path']}")
 
 
+def _find_local_track(conn, query: str) -> tuple[int, str, str] | None:
+    """로컬 DB에서 트랙을 조용히 찾는다(없거나 모호하면 None, 에러 출력 없음).
+
+    export-playlist는 여러 트랙을 한 번에 처리하므로, 로컬에 없으면 조용히
+    Spotify 검색으로 넘어가야 한다 — _resolve_seed_track_id처럼 stderr에 찍지 않는다.
+    """
+    if query.isdigit():
+        row = conn.execute("SELECT id, artist, title FROM tracks WHERE id = ?", (int(query),)).fetchone()
+        return row if row else None
+    rows = conn.execute(
+        "SELECT id, artist, title FROM tracks WHERE artist LIKE ? OR title LIKE ?",
+        (f"%{query}%", f"%{query}%"),
+    ).fetchall()
+    return rows[0] if len(rows) == 1 else None
+
+
+def _known_spotify_track_id(conn, track_id: int) -> str | None:
+    """이미 동기화된 청취 이력/상위 청취곡에서 이 로컬 트랙의 spotify_track_id를 찾는다.
+
+    이미 알고 있으면 검색 API 호출을 아낄 수 있고, 매칭 정확도도 더 높다.
+    """
+    row = conn.execute(
+        """
+        SELECT spotify_track_id FROM listening_history WHERE track_id = ?
+        UNION
+        SELECT spotify_track_id FROM top_tracks WHERE track_id = ?
+        LIMIT 1
+        """,
+        (track_id, track_id),
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _resolve_spotify_uri(conn, query: str) -> tuple[str, str, str] | None:
+    """트랙 인자(id/아티스트·제목 일부/자유 텍스트)를 Spotify 트랙 uri로 해석한다.
+
+    로컬 DB 매칭 -> 이미 아는 spotify_track_id -> Spotify 검색 순으로 시도하고,
+    끝내 못 찾으면 None을 반환해 호출부가 정직하게 "찾을 수 없음"으로 표시하게 한다.
+    """
+    local = _find_local_track(conn, query)
+    if local:
+        track_id, artist, title = local
+        known_id = _known_spotify_track_id(conn, track_id)
+        if known_id:
+            return f"spotify:track:{known_id}", artist, title
+        search_title, search_artist = title, artist
+    elif " - " in query:
+        search_artist, search_title = (s.strip() for s in query.split(" - ", 1))
+    else:
+        search_artist, search_title = "", query
+
+    result = spotify.search_track(search_title, search_artist)
+    if not result:
+        return None
+    result_artist = ", ".join(a["name"] for a in result.get("artists", []))
+    return result["uri"], result_artist, result.get("name", search_title)
+
+
+def export_playlist(name: str, tracks: list[str], db_path: str = DEFAULT_DB_PATH) -> None:
+    """트랙 목록을 Spotify 플레이리스트(비공개)로 내보낸다.
+
+    각 트랙 인자는 로컬 트랙 id/아티스트·제목 일부이거나 "아티스트 - 제목" 형태의
+    자유 텍스트도 허용한다. Spotify에서 못 찾은 트랙은 건너뛰고 정직하게 표시한다.
+    """
+    conn = connect(db_path)
+    uris = []
+    for query in tracks:
+        resolved = _resolve_spotify_uri(conn, query)
+        if resolved is None:
+            print(f"'{query}': Spotify에서 찾을 수 없음, 건너뜀", file=sys.stderr)
+            continue
+        uri, artist, title = resolved
+        print(f"'{query}' -> {artist} - {title}")
+        uris.append(uri)
+
+    if not uris:
+        print("추가할 트랙을 하나도 찾지 못함", file=sys.stderr)
+        return
+
+    user_id = spotify.get_current_user_id()
+    playlist = spotify.create_playlist(user_id, name, description="digger로 생성한 플레이리스트")
+    spotify.add_tracks(playlist["id"], uris)
+    playlist_url = (playlist.get("external_urls") or {}).get("spotify", "")
+    print(f"완료: '{name}'에 {len(uris)}곡 추가함 {playlist_url}")
+
+
 FEEDBACK_ACTIONS = ["like", "skip"]
 
 
@@ -645,6 +731,15 @@ def main() -> None:
         help="이미 아는 곡/아티스트 중 이 질림 스코어를 넘는 결과는 제외 (--include-known과 독립적으로 적용)",
     )
 
+    export_playlist_parser = subparsers.add_parser(
+        "export-playlist", help="트랙 목록을 Spotify 비공개 플레이리스트로 내보내기"
+    )
+    export_playlist_parser.add_argument("name", help="생성할 플레이리스트 이름")
+    export_playlist_parser.add_argument(
+        "tracks", nargs="+", help="트랙 id, 아티스트/제목 일부, 또는 '아티스트 - 제목' 형태의 자유 텍스트"
+    )
+    export_playlist_parser.add_argument("--db", default=DEFAULT_DB_PATH)
+
     feedback_parser = subparsers.add_parser("feedback", help="트랙에 대한 좋아요/스킵 피드백 기록")
     feedback_parser.add_argument("track", help="피드백을 남길 트랙의 id 또는 아티스트/제목 일부")
     feedback_parser.add_argument("--action", choices=FEEDBACK_ACTIONS, required=True)
@@ -685,6 +780,8 @@ def main() -> None:
         dig_relations_command(
             args.seed, args.category, args.top_n, args.db, args.include_known, args.exclude_tired_above
         )
+    elif args.command == "export-playlist":
+        export_playlist(args.name, args.tracks, args.db)
     elif args.command == "feedback":
         feedback_command(args.track, args.action, args.seed, args.context, args.db)
     elif args.command == "feedback-log":
