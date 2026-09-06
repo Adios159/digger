@@ -325,7 +325,7 @@ h1, h2, h3 {
 
 select {
   appearance: none;
-  background: rgba(255,255,255,0.05);
+  background-color: #0e1a15;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text);
@@ -333,9 +333,15 @@ select {
   font-size: 13px;
   font-family: "Inter", sans-serif;
   cursor: pointer;
+  color-scheme: dark;
 }
 
 select:focus { outline: none; border-color: var(--green); }
+
+select option {
+  background-color: #0e1a15;
+  color: var(--text);
+}
 
 .toggle-row { flex-direction: row; align-items: center; justify-content: space-between; }
 
