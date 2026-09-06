@@ -253,30 +253,44 @@ def _musicbrainz_relations(conn, track_id: int, artist: str, title: str) -> list
     return relations
 
 
-def _discogs_label_relations(track_id: int, artist: str, title: str) -> list[dict]:
-    """Discogs 릴리즈 검색 결과의 label 필드에서 소속 레이블 관계를 뽑는다.
+def _discogs_relations(track_id: int, artist: str, title: str) -> list[dict]:
+    """Discogs 릴리즈 하나에서 소속 레이블과 크레딧(사람) 관계를 함께 뽑는다.
+
+    검색은 rate limit이 걸린 요청이라 레이블용/크레딧용으로 따로 부르지 않고 한 번의
+    검색 결과를 같이 쓴다.
 
     "Not On Label(...)"은 Discogs가 자체발매/레이블 없음을 표기하는 관례적 문자열이라
-    관계로 남기지 않고 정직하게 공백 처리한다.
+    관계로 남기지 않고 정직하게 공백 처리한다. 크레딧은 to_entity_id를 비워 두는데,
+    그 자리는 MusicBrainz mbid를 담는 칸이고 Discogs 아티스트 id를 넣으면 탐색 단계에서
+    엉뚱한 mbid 조회가 되기 때문이다(원본 id는 attributes에 남긴다).
     """
     release = discogs.search_release(artist, title)
     if not release:
         return []
-    return [
-        {
-            "source": "discogs",
-            "relation_type": "released_on_label",
-            "from_entity_type": "track",
-            "from_entity_id": str(track_id),
-            "from_entity_name": f"{artist} - {title}",
-            "to_entity_type": "label",
-            "to_entity_id": None,
-            "to_entity_name": label_name,
-            "attributes": [],
-        }
+
+    base = {
+        "source": "discogs",
+        "from_entity_type": "track",
+        "from_entity_id": str(track_id),
+        "from_entity_name": f"{artist} - {title}",
+        "to_entity_id": None,
+    }
+
+    relations = [
+        {**base, "relation_type": "released_on_label", "to_entity_type": "label",
+         "to_entity_name": label_name, "attributes": []}
         for label_name in release.get("label", [])
         if label_name and not label_name.lower().startswith("not on label")
     ]
+
+    relations += [
+        {**base, "relation_type": credit["role"], "to_entity_type": "artist",
+         "to_entity_name": credit["name"],
+         "attributes": [f"discogs_artist_id:{credit['discogs_artist_id']}"] if credit.get("discogs_artist_id") else []}
+        for credit in discogs.get_credits(release["id"], title)
+        if any(keyword in credit["role"].lower() for keyword in COLLAB_KEYWORDS)
+    ]
+    return relations
 
 
 def collect_relations(db_path: str = DEFAULT_DB_PATH) -> None:
@@ -302,7 +316,7 @@ def collect_relations(db_path: str = DEFAULT_DB_PATH) -> None:
             print(f"    musicbrainz 조회 실패: {e}", file=sys.stderr)
 
         try:
-            fetched = _discogs_label_relations(track_id, artist, title)
+            fetched = _discogs_relations(track_id, artist, title)
             relations += fetched
             print(f"    discogs: {len(fetched)}개 관계")
         except Exception as e:
