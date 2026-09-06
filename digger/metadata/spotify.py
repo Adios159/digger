@@ -181,9 +181,12 @@ def _post(path: str, json_body: dict[str, Any]) -> dict[str, Any]:
     raise RuntimeError("Spotify API 요청이 재시도 후에도 실패함(429)")
 
 
-def search_track(artist: str, title: str) -> dict[str, Any] | None:
-    """아티스트+제목으로 트랙을 검색해 첫 결과를 반환한다(없으면 None)."""
-    data = _request("search", {"q": f"track:{title} artist:{artist}", "type": "track", "limit": 1})
+def search_track(title: str, artist: str = "") -> dict[str, Any] | None:
+    """제목(+아티스트, 선택)으로 트랙을 검색해 첫 결과를 반환한다(없으면 None)."""
+    query = f"track:{title}"
+    if artist:
+        query += f" artist:{artist}"
+    data = _request("search", {"q": query, "type": "track", "limit": 1})
     items = (data.get("tracks") or {}).get("items") or []
     return items[0] if items else None
 
