@@ -10,12 +10,9 @@ function formatDuration(sec) {
 }
 
 function initials(artist) {
-  return artist
-    .split(/\s+/)
-    .map((w) => w[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
+  const words = artist.trim().split(/\s+/);
+  const letters = words.length === 1 ? words[0].slice(0, 2) : words.slice(0, 2).map((w) => w[0]).join("");
+  return letters.toUpperCase();
 }
 
 /* ---------- 태그 벡터 / 코사인 유사도 (similarity.py 이식) ---------- */
