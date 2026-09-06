@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   - `analyze <디렉토리> [--db digger.db]`: 디렉토리 내 오디오 파일(.flac/.mp3/.wav)을 Essentia로 분석해 `tracks` 테이블에 upsert.
   - `enrich [--db digger.db]`: DB에 있는 모든 트랙에 대해 Discogs → Last.fm → MusicBrainz 순으로 태그를 조회해 `track_tags`에 upsert. 소스 하나가 실패해도 나머지는 계속 진행됨(개별 try/except).
   - `import-liked [--db digger.db] [--max 2000]`: Spotify "좋아요" 곡을 `tracks`에 메타데이터만으로 적재(`spotify_track_id`가 식별자, bpm/key/energy는 NULL). 이어서 `enrich`를 태워야 태그가 채워져 탐색에 반영됨.
-- API 서버: `uvicorn digger.api:app --reload` — CLI와 같은 SQLite DB(`digger.db`)를 그대로 쓰는 두 번째 인터페이스. `/docs`에서 전체 엔드포인트 확인 가능. `frontend/`가 같은 앱에 정적 파일로 마운트되어 있어서, 이 명령 하나로 `http://127.0.0.1:8000/`에서 UI+API가 함께 뜸(프론트엔드는 이제 이 서버가 떠 있어야 동작함 — mock-data.js 제거됨).
+- API 서버: `uvicorn digger.api:app --reload` — CLI와 같은 SQLite DB(`digger.db`)를 그대로 쓰는 두 번째 인터페이스. `/docs`에서 전체 엔드포인트 확인 가능. `frontend/`가 같은 앱에 정적 파일로 마운트되어 있어서, 이 명령 하나로 `http://127.0.0.1:8000/`에서 UI+API가 함께 뜸(프론트엔드는 이제 이 서버가 떠 있어야 동작함 — mock-data.js 제거됨). UI의 '파이프라인' 탭에서 analyze/enrich/collect-relations/sync-listening/import-liked를 그대로 트리거할 수 있음 — 전부 동기 실행이라 브라우저가 끝날 때까지 기다리고, 한 번에 하나만 돌게 막아둠(외부 소스 rate limit이 모듈 전역이라 병렬 실행하면 정책을 어김). Spotify 최초 인증은 서버 콘솔에서 해야 함.
 - DB 파일(`digger.db`)과 원본 음원(`music/`)은 `.gitignore`에 포함되어 커밋 대상이 아님.
 
 ## 아키텍처

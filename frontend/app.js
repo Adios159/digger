@@ -3,25 +3,52 @@
 
 let TRACKS = [];
 let BOREDOM = {};
+let FEEDBACK = [];
+
+const CATEGORY_LABELS = { collab: "협업", label: "레이블", samples: "샘플", influence: "영향" };
+const FEEDBACK_LOG_LIMIT = 200;
 
 const trackById = (id) => TRACKS.find((t) => t.id === id);
 
-async function fetchJSON(url) {
-  const res = await fetch(url);
+async function requestJSON(url, options) {
+  const res = await fetch(url, options);
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail || `${url} 요청 실패 (${res.status})`);
+    // 422(검증 실패)의 detail은 문자열이 아니라 객체 배열이라 그대로 쓰면 [object Object]가 된다
+    const detail = body.detail;
+    throw new Error(typeof detail === "string" ? detail : `${url} 요청 실패 (${res.status})`);
   }
-  return res.json();
+  return res.status === 204 ? null : res.json();
 }
 
+const fetchJSON = (url) => requestJSON(url);
+const postJSON = (url, body) =>
+  requestJSON(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? null : JSON.stringify(body),
+  });
+
 async function loadInitialData() {
-  const [tracks, boredomList] = await Promise.all([
+  const [tracks, boredomList, feedback] = await Promise.all([
     fetchJSON("/tracks"),
     fetchJSON("/boredom?top=1000"),
+    fetchJSON(`/feedback?top=${FEEDBACK_LOG_LIMIT}`),
   ]);
   TRACKS = tracks;
   BOREDOM = Object.fromEntries(boredomList.map((b) => [b.track_id, b.boredom_score]));
+  FEEDBACK = feedback;
+}
+
+/* 결과 목록 전체를 다시 그리지 않고 알릴 것만 알린다 — 피드백 한 번에 유사도
+   재조회가 딸려오면 순위가 눈앞에서 바뀌어 오히려 방해가 된다. */
+function showToast(message, kind = "info") {
+  const host = document.getElementById("toast-host");
+  const el = document.createElement("div");
+  el.className = `toast toast-${kind}`;
+  el.textContent = message;
+  host.appendChild(el);
+  setTimeout(() => el.remove(), 4200);
 }
 
 function showAppError(err) {
@@ -78,6 +105,82 @@ function renderLibrary() {
   `).join("");
 }
 
+/* ---------- 좋아요/스킵 피드백 ---------- */
+
+/* 백엔드는 같은 트랙의 피드백을 덮어쓰지 않고 이벤트로 쌓는다(db.insert_feedback).
+   버튼은 "지금 이 트랙을 어떻게 평가해뒀나"를 보여주면 되므로 최신 한 건만 본다.
+   GET /feedback이 created_at 내림차순이라 처음 만나는 것이 최신이다. */
+const latestFeedbackFor = (trackId) => FEEDBACK.find((f) => f.track_id === trackId);
+
+const THUMB_PATH =
+  '<svg viewBox="0 0 24 24" fill="none"><path d="M7 21.5V10l4.6-7.5 1.1.5c.8.4 1.2 1.3 1 2.2L12.9 9.5h5.4a2 2 0 0 1 2 2.4l-1.4 7.6a2 2 0 0 1-2 1.6H7z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M7 10.5H3.5v11H7" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+
+function feedbackButtons(trackId, context, seedTrackId = null) {
+  const latest = latestFeedbackFor(trackId);
+  const seedArg = seedTrackId == null ? "null" : seedTrackId;
+  const button = (action, title) => `
+    <button class="fb-btn fb-${action} ${latest && latest.action === action ? "active" : ""}"
+            data-action="${action}" title="${title}"
+            onclick="onFeedback(event, ${trackId}, '${action}', '${context}', ${seedArg})">
+      ${THUMB_PATH}
+    </button>`;
+  return `<div class="feedback-actions">${button("like", "좋아요로 기록")}${button("skip", "스킵으로 기록")}</div>`;
+}
+
+function markFeedbackState(container, action) {
+  container.querySelectorAll(".fb-btn").forEach((b) => b.classList.toggle("active", b.dataset.action === action));
+}
+
+async function onFeedback(event, trackId, action, context, seedTrackId) {
+  event.stopPropagation(); // 결과 행 클릭(모달 열기)까지 같이 발동하지 않게
+  const container = event.currentTarget.closest(".feedback-actions");
+  try {
+    await postJSON("/feedback", {
+      track_id: trackId,
+      action,
+      context,
+      seed_track_id: seedTrackId,
+    });
+    FEEDBACK = await fetchJSON(`/feedback?top=${FEEDBACK_LOG_LIMIT}`);
+  } catch (err) {
+    showToast(`피드백 기록 실패: ${err.message}`, "error");
+    return;
+  }
+  markFeedbackState(container, action);
+  renderFeedbackHistory(trackId);
+  const track = trackById(trackId);
+  showToast(`${action === "like" ? "좋아요" : "스킵"} 기록됨 — ${track ? track.title : `id=${trackId}`}`);
+}
+
+function formatFeedbackTime(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString("ko-KR", { dateStyle: "short", timeStyle: "short" });
+}
+
+function feedbackHistoryHtml(trackId) {
+  const history = FEEDBACK.filter((f) => f.track_id === trackId);
+  if (history.length === 0) {
+    return `<p class="modal-empty-note">아직 기록된 피드백 없음</p>`;
+  }
+  return history
+    .slice(0, 5)
+    .map(
+      (f) => `
+      <div class="feedback-log-row">
+        <span class="fb-log-action fb-log-${f.action}">${f.action === "like" ? "좋아요" : "스킵"}</span>
+        <span class="fb-log-context">${f.context || "직접"}${f.seed_title ? ` · 시드 ${f.seed_artist} - ${f.seed_title}` : ""}</span>
+        <span class="fb-log-time">${formatFeedbackTime(f.created_at)}</span>
+      </div>`
+    )
+    .join("");
+}
+
+/* 모달이 열려 있고 그 트랙의 기록이 바뀐 경우에만 갱신한다. */
+function renderFeedbackHistory(trackId) {
+  const el = document.getElementById("modal-feedback-history");
+  if (el && Number(el.dataset.trackId) === trackId) el.innerHTML = feedbackHistoryHtml(trackId);
+}
+
 /* ---------- 탐색(Similar) 탭 ---------- */
 
 function populateSeedSelect(selectEl) {
@@ -131,6 +234,10 @@ async function renderSimilar() {
 
   list.innerHTML = ranked.map((r, i) => `
     <div class="result-row glass" onclick="openTrackModal(${r.track_id})">
+      <label class="row-select" title="플레이리스트에 담기" onclick="event.stopPropagation()">
+        <input type="checkbox" ${SELECTED_FOR_EXPORT.has(r.track_id) ? "checked" : ""}
+               onchange="toggleExportSelection(event, ${r.track_id})">
+      </label>
       <div class="result-rank">${i + 1}</div>
       <div class="track-art small">${initials(r.artist)}</div>
       <div class="result-main">
@@ -141,23 +248,118 @@ async function renderSimilar() {
         <div class="similarity-bar"><div class="similarity-fill" style="width:${(r.similarity * 100).toFixed(0)}%"></div></div>
         <span class="similarity-val">${r.similarity.toFixed(3)}</span>
       </div>
+      ${feedbackButtons(r.track_id, digMode ? "digging_zone" : "similar", seedId)}
     </div>
   `).join("");
+}
+
+/* ---------- Spotify 플레이리스트 내보내기 ---------- */
+
+/* 시드를 바꿔가며 고른 곡이 한 플레이리스트에 모이도록 선택은 목록을 다시 그려도,
+   시드를 바꿔도 유지한다. 관계 탐험 결과는 여기 못 담는다 — 그쪽 후보는 로컬
+   트랙이 아니라 외부 엔티티 이름이라 id로 정확히 지목할 수가 없다. */
+const SELECTED_FOR_EXPORT = new Set();
+
+function toggleExportSelection(event, trackId) {
+  event.stopPropagation();
+  if (event.currentTarget.checked) SELECTED_FOR_EXPORT.add(trackId);
+  else SELECTED_FOR_EXPORT.delete(trackId);
+  renderExportBar();
+}
+
+function renderExportBar() {
+  document.getElementById("export-count").textContent = SELECTED_FOR_EXPORT.size;
+  document.getElementById("export-bar").hidden = SELECTED_FOR_EXPORT.size === 0;
+}
+
+function clearExportSelection() {
+  SELECTED_FOR_EXPORT.clear();
+  renderExportBar();
+  document.querySelectorAll(".row-select input").forEach((box) => { box.checked = false; });
+}
+
+const exportQueryLabel = (query) => {
+  const track = trackById(Number(query));
+  return track ? `${track.artist} - ${track.title}` : query;
+};
+
+function renderExportResult(result) {
+  const el = document.getElementById("export-result");
+  const found = result.tracks.filter((t) => t.found);
+  const missing = result.tracks.filter((t) => !t.found);
+  el.hidden = false;
+  el.innerHTML = `
+    <div class="export-result-head">
+      <span><b>${found.length}곡</b> 추가됨${missing.length ? ` · <b class="export-warn">${missing.length}곡</b> 못 찾음` : ""}</span>
+      ${result.playlist_url ? `<a href="${result.playlist_url}" target="_blank" rel="noopener">Spotify에서 열기</a>` : ""}
+    </div>
+    ${missing.length ? `<p class="export-missing">Spotify에서 찾지 못함: ${missing.map((t) => exportQueryLabel(t.query)).join(", ")}</p>` : ""}
+  `;
+}
+
+async function exportPlaylist() {
+  const btn = document.getElementById("export-btn");
+  const nameInput = document.getElementById("playlist-name");
+  const name = nameInput.value.trim() || nameInput.placeholder;
+
+  btn.disabled = true;
+  btn.textContent = "내보내는 중...";
+  try {
+    // 백엔드(cli._find_local_track)는 숫자 문자열을 로컬 트랙 id로 바로 해석한다.
+    // 이름으로 보내면 LIKE 매칭이라 동명 트랙에서 모호해지므로 id로 보낸다.
+    const result = await postJSON("/playlists", {
+      name,
+      tracks: [...SELECTED_FOR_EXPORT].map(String),
+    });
+    renderExportResult(result);
+    showToast(`'${name}' 플레이리스트 생성됨`);
+    clearExportSelection();
+  } catch (err) {
+    showToast(`플레이리스트 내보내기 실패: ${err.message}`, "error");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Spotify로 내보내기";
+  }
+}
+
+function setupExportControls() {
+  const today = new Date().toLocaleDateString("ko-KR", { year: "numeric", month: "2-digit", day: "2-digit" });
+  document.getElementById("playlist-name").placeholder = `digger 디깅 ${today}`;
+  document.getElementById("export-btn").addEventListener("click", exportPlaylist);
+  document.getElementById("export-clear").addEventListener("click", clearExportSelection);
 }
 
 /* ---------- 관계 탐험 탭 ---------- */
 
 let activeCategory = "collab";
 
+const ENTITY_TYPE_LABELS = { artist: "아티스트", recording: "레코딩", label: "레이블", track: "트랙" };
+
+/* dig_relations가 돌려주는 관계 한 건을 배지로 요약한다.
+   entity_mbid가 없으면 graph.py가 한 단계 더 들어가지 못하고 멈춘 결과다
+   (Discogs 크레딧/레이블) — 왜 후보가 얕은지 화면에서 바로 알 수 있게 표시한다. */
+function relationBadges(r) {
+  const badges = [];
+  const entityLabel = ENTITY_TYPE_LABELS[r.entity_type] || r.entity_type;
+  if (entityLabel) badges.push(`<span class="rel-badge rel-badge-type">${entityLabel}</span>`);
+  if (r.relation_type) badges.push(`<span class="rel-badge">${r.relation_type}</span>`);
+  if (!r.entity_mbid) badges.push(`<span class="rel-badge rel-badge-muted" title="MusicBrainz id가 없어 이 지점에서 탐색이 멈춤">mbid 없음</span>`);
+  if (r.already_known) badges.push(`<span class="known-badge">이미 아는 곡/아티스트</span>`);
+  return badges.join("");
+}
+
 async function renderRelations() {
   const seedId = Number(document.getElementById("rel-seed-select").value);
   const seed = trackById(seedId);
   const includeKnown = document.getElementById("include-known-toggle").checked;
+  const excludeTired = document.getElementById("rel-exclude-tired-toggle").checked ? 3.0 : null;
 
-  renderSeedBanner(document.getElementById("rel-seed-banner"), seed, ` · 카테고리=${activeCategory}`);
+  const bannerExtra = `${CATEGORY_LABELS[activeCategory]} 축${excludeTired != null ? " · 질림 3.0 초과 제외" : ""}`;
+  renderSeedBanner(document.getElementById("rel-seed-banner"), seed, ` · ${bannerExtra}`);
 
   const list = document.getElementById("relations-results");
   const params = new URLSearchParams({ category: activeCategory, top: "50", include_known: includeKnown });
+  if (excludeTired != null) params.set("exclude_tired_above", excludeTired);
 
   let items;
   try {
@@ -172,13 +374,21 @@ async function renderRelations() {
     return;
   }
 
+  /* 질림 스코어는 exclude_tired_above를 넘겼을 때만 백엔드가 계산한다
+     (안 넘기면 전부 0.0) — 계산되지 않은 0을 "안 질림"으로 오해하지 않게 그때만 그린다. */
   list.innerHTML = items.map((r, i) => `
     <div class="result-row glass">
       <div class="result-rank">${i + 1}</div>
       <div class="result-main">
-        <div class="result-title">${r.entity_name}${r.already_known ? '<span class="known-badge">이미 아는 곡/아티스트</span>' : ""}</div>
+        <div class="result-title">${r.entity_name}${relationBadges(r)}</div>
         <div class="result-sub">${r.path}</div>
       </div>
+      ${excludeTired != null ? `
+        <div class="boredom-meter">
+          <div class="boredom-bar"><div class="boredom-fill" style="width:${Math.min(r.boredom_score / excludeTired * 100, 100).toFixed(0)}%"></div></div>
+          <span class="boredom-val">${r.boredom_score.toFixed(2)}</span>
+        </div>
+      ` : ""}
     </div>
   `).join("");
 }
@@ -213,9 +423,133 @@ function renderBoredom() {
   `).join("");
 }
 
-/* ---------- 트랙 상세 모달 ---------- */
+/* ---------- 파이프라인 실행 탭 ---------- */
 
-const CATEGORY_LABELS = { collab: "협업", label: "레이블", samples: "샘플", influence: "영향" };
+/* api.py의 배치 트리거 엔드포인트들. 전부 동기라 응답이 올 때까지 요청이 열려 있고,
+   enrich/collect-relations는 외부 소스 rate limit(Discogs 1.1초, MusicBrainz 1초)
+   때문에 트랙 수에 비례해 몇 분씩 걸린다. 화면은 그 사실을 숨기지 않는다. */
+const PIPELINES = [
+  {
+    key: "analyze",
+    title: "analyze",
+    desc: "디렉토리 안의 .flac/.mp3/.wav를 Essentia로 분석해 tracks에 적재. 곡당 수 초.",
+    input: { label: "디렉토리", value: "music", type: "text" },
+    request: (v) => ["/analyze", { directory: v }],
+  },
+  {
+    key: "enrich",
+    title: "enrich",
+    desc: "모든 트랙에 Discogs → Last.fm → MusicBrainz 순으로 장르 태그를 조회해 적재. 소스별 rate limit 때문에 트랙 수에 비례해 오래 걸림.",
+    request: () => ["/enrich", undefined],
+  },
+  {
+    key: "collect-relations",
+    title: "collect-relations",
+    desc: "MusicBrainz/Discogs에서 협업·레이블·샘플·영향 관계를 모아 relations에 적재. 관계 탐험 탭이 이 데이터를 씀.",
+    request: () => ["/collect-relations", undefined],
+  },
+  {
+    key: "sync-listening",
+    title: "sync-listening",
+    desc: "Spotify 최근 재생/상위 청취곡을 동기화해 질림 스코어의 근거를 갱신. 최초 실행이면 서버 콘솔에서 브라우저 인증이 필요함.",
+    request: () => ["/sync-listening", undefined],
+  },
+  {
+    key: "import-liked",
+    title: "import-liked",
+    desc: "Spotify 좋아요 곡을 메타데이터만으로 tracks에 적재(bpm/key/energy는 비어 있음). 태그를 채우려면 이어서 enrich를 돌려야 함.",
+    input: { label: "최대 곡 수", value: "2000", type: "number" },
+    request: (v) => [`/import-liked?max_items=${encodeURIComponent(v)}`, undefined],
+  },
+];
+
+/* 동시에 두 개를 돌리지 않는다. 같은 SQLite 파일을 쓰는 데다, 외부 소스의 rate limit이
+   모듈 전역 _last_request_time으로 구현돼 있어(metadata/*.py) 병렬 실행하면 정책을 어긴다. */
+let pipelineRunning = false;
+
+const pipelineInputId = (key) => `pipeline-input-${key}`;
+
+function renderPipelinePanel() {
+  document.getElementById("pipeline-list").innerHTML = PIPELINES.map(
+    (p) => `
+    <div class="pipeline-card glass">
+      <div class="pipeline-main">
+        <div class="pipeline-title">${p.title}</div>
+        <p class="pipeline-desc">${p.desc}</p>
+        <div id="pipeline-status-${p.key}" class="pipeline-status">대기 중</div>
+      </div>
+      <div class="pipeline-actions">
+        ${p.input
+          ? `<label class="pipeline-input">
+               <span>${p.input.label}</span>
+               <input id="${pipelineInputId(p.key)}" type="${p.input.type}" value="${p.input.value}">
+             </label>`
+          : ""}
+        <button class="primary-btn pipeline-run" onclick="runPipeline('${p.key}')">실행</button>
+      </div>
+    </div>`
+  ).join("");
+}
+
+function setPipelineDisabled(disabled) {
+  document.querySelectorAll(".pipeline-run").forEach((b) => { b.disabled = disabled; });
+}
+
+/* 파이프라인이 DB를 바꿨으니 화면 데이터를 통째로 다시 읽는다.
+   시드 선택은 그 트랙이 아직 남아 있으면 유지한다 — 보던 자리를 잃지 않게. */
+async function reloadAllViews() {
+  const seedSelects = ["seed-select", "rel-seed-select"];
+  const previous = seedSelects.map((id) => document.getElementById(id).value);
+
+  await loadInitialData();
+
+  renderLibrary();
+  seedSelects.forEach((id, i) => {
+    const el = document.getElementById(id);
+    populateSeedSelect(el);
+    if (TRACKS.some((t) => String(t.id) === previous[i])) el.value = previous[i];
+  });
+  await renderSimilar();
+  await renderRelations();
+  renderBoredom();
+}
+
+async function runPipeline(key) {
+  if (pipelineRunning) return;
+  const spec = PIPELINES.find((p) => p.key === key);
+  const inputEl = spec.input ? document.getElementById(pipelineInputId(key)) : null;
+  const [url, body] = spec.request(inputEl ? inputEl.value.trim() : null);
+
+  const status = document.getElementById(`pipeline-status-${key}`);
+  const startedAt = Date.now();
+  const elapsed = () => Math.round((Date.now() - startedAt) / 1000);
+  const tick = setInterval(() => { status.textContent = `실행 중... ${elapsed()}초 경과`; }, 1000);
+
+  pipelineRunning = true;
+  setPipelineDisabled(true);
+  status.textContent = "실행 중...";
+  status.className = "pipeline-status running";
+
+  try {
+    await postJSON(url, body);
+    clearInterval(tick);
+    status.textContent = `완료 (${elapsed()}초)`;
+    status.className = "pipeline-status done";
+    await reloadAllViews();
+    showToast(`${spec.title} 완료 — 화면 데이터 새로고침됨`);
+  } catch (err) {
+    clearInterval(tick);
+    status.textContent = `실패: ${err.message}`;
+    status.className = "pipeline-status failed";
+    showToast(`${spec.title} 실패: ${err.message}`, "error");
+  } finally {
+    clearInterval(tick);
+    pipelineRunning = false;
+    setPipelineDisabled(false);
+  }
+}
+
+/* ---------- 트랙 상세 모달 ---------- */
 
 async function renderTrackModal(track) {
   const boredom = BOREDOM[track.id];
@@ -265,6 +599,14 @@ async function renderTrackModal(track) {
     <div class="modal-section">
       <div class="modal-section-label">질림 스코어</div>
       <p class="modal-empty-note">${boredom != null ? `${boredom.toFixed(2)} · sync-listening 기반` : "청취 이력 없음"}</p>
+    </div>
+
+    <div class="modal-section">
+      <div class="modal-section-label modal-section-label-row">
+        <span>피드백</span>
+        ${feedbackButtons(track.id, "library")}
+      </div>
+      <div id="modal-feedback-history" data-track-id="${track.id}">${feedbackHistoryHtml(track.id)}</div>
     </div>
 
     <div class="modal-section">
@@ -367,6 +709,7 @@ function setupRelationsControls() {
   });
 
   document.getElementById("include-known-toggle").addEventListener("change", renderRelations);
+  document.getElementById("rel-exclude-tired-toggle").addEventListener("change", renderRelations);
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -383,6 +726,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   renderLibrary();
   setupSimilarControls();
   setupRelationsControls();
+  setupExportControls();
+  renderPipelinePanel();
   renderSimilar();
   renderRelations();
   renderBoredom();

@@ -43,6 +43,10 @@
         <svg viewBox="0 0 24 24" fill="none"><path d="M3 18h3v-6H3v6zM10.5 18h3V6h-3v12zM18 18h3v-10h-3v10z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
         질림 랭킹
       </button>
+      <button class="tab-btn" data-tab="pipeline" role="tab" aria-selected="false">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M12 3v11m0 0l-3.5-3.5M12 14l3.5-3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 16v3a2 2 0 002 2h12a2 2 0 002-2v-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        파이프라인
+      </button>
     </nav>
   </header>
 
@@ -113,6 +117,15 @@
 
         <div class="results">
           <div id="seed-banner" class="seed-banner glass"></div>
+
+          <div id="export-bar" class="export-bar glass" hidden>
+            <span class="export-count"><b id="export-count">0</b>곡 선택됨</span>
+            <input id="playlist-name" type="text" placeholder="digger 디깅">
+            <button id="export-btn" class="primary-btn">Spotify로 내보내기</button>
+            <button id="export-clear" class="ghost-btn">선택 해제</button>
+          </div>
+          <div id="export-result" class="export-result glass" hidden></div>
+
           <div id="similar-results" class="result-list"></div>
         </div>
       </div>
@@ -149,6 +162,14 @@
               <span class="switch-track"><span class="switch-thumb"></span></span>
             </label>
           </label>
+          <label class="field toggle-row">
+            <span class="field-label">질림 스코어 3.0 초과 제외</span>
+            <label class="switch">
+              <input type="checkbox" id="rel-exclude-tired-toggle">
+              <span class="switch-track"><span class="switch-thumb"></span></span>
+            </label>
+          </label>
+          <p class="field-hint">발견 후보 이름이 로컬 트랙과 매칭될 때만 질림 스코어가 붙음</p>
         </aside>
 
         <div class="results">
@@ -169,6 +190,17 @@
       <div id="boredom-list" class="boredom-list glass"></div>
     </section>
 
+    <!-- 파이프라인 -->
+    <section id="tab-pipeline" class="tab-panel">
+      <div class="panel-head">
+        <div>
+          <h1>파이프라인</h1>
+          <p class="panel-desc">CLI 서브커맨드와 같은 배치 작업을 서버에서 실행. 전부 동기 실행이라 끝날 때까지 기다려야 하고, 한 번에 하나만 돌린다.</p>
+        </div>
+      </div>
+      <div id="pipeline-list" class="pipeline-list"></div>
+    </section>
+
   </main>
 
   <div id="track-modal-overlay" class="modal-overlay" hidden>
@@ -180,6 +212,8 @@
     </div>
   </div>
 </div>
+
+<div id="toast-host" class="toast-host" aria-live="polite"></div>
 
 <script src="app.js"></script>
 </body>
