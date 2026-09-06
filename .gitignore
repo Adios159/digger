@@ -1,10 +1,39 @@
+# 원본 음원 (저작권 있는 개인 라이브러리 — 커밋 대상 아님)
 music/
 *.flac
 *.mp3
 *.wav
+*.m4a
+*.aac
+
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 가상환경
 .venv/
 venv/
+env/
+
+# 로컬 산출물 / DB
 *.db
-*.egg-info/
+*.sqlite
+*.sqlite3
+
+# 환경 변수 / 시크릿
+.env
+.env.*
+!.env.example
+.spotify_token.json
+
+# OS / 에디터
+.DS_Store
+.vscode/
+.idea/

@@ -1,0 +1,8 @@
+essentia
+mutagen
+requests
+python-dotenv
+numpy
+scikit-learn
+fastapi
+uvicorn

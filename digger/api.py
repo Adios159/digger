@@ -1,0 +1,324 @@
+"""CLI(cli.py)와 같은 로직을 REST API로 노출하는 FastAPI 앱.
+
+cli.py는 print 중심이라 그대로 재사용하지 않고, db.py/similarity.py/graph.py/
+boredom.py/metadata 쪽 저수준 함수를 직접 호출해 JSON으로 반환한다(파이프라인
+트리거 엔드포인트는 예외적으로 cli.py 함수를 그대로 호출한다 — 배치 성격이라
+로직 중복이 오히려 더 나쁨). SQLite를 그대로 쓴다 — 아직 5곡짜리 테스트 규모라
+Postgres 이관은 과함. CLI와 나란히 쓰는 두 번째 인터페이스로 둔다.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+from typing import Literal
+
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+
+from . import cli as cli_module
+from .boredom import compute_boredom_scores
+from .db import connect, insert_feedback
+from .graph import dig_relations
+from .metadata import spotify
+from .relations import CATEGORIES
+from .similarity import DEFAULT_ZONE_HIGH, DEFAULT_ZONE_LOW, find_digging_zone, find_similar
+from .vectorize import agreement_weights, resolve_styles_by_source
+
+DEFAULT_DB_PATH = "digger.db"
+
+TRACK_COLUMNS = ["id", "artist", "title", "album", "bpm", "key", "key_scale", "energy", "duration_sec"]
+
+app = FastAPI(title="digger API")
+
+
+def get_db():
+    conn = connect(DEFAULT_DB_PATH)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def _get_track_row(conn: sqlite3.Connection, track_id: int) -> tuple:
+    row = conn.execute(
+        "SELECT id, artist, title, album, bpm, key, key_scale, energy, duration_sec, mb_recording_id "
+        "FROM tracks WHERE id = ?",
+        (track_id,),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"트랙을 찾을 수 없음: id={track_id}")
+    return row
+
+
+def _resolved_tags(conn: sqlite3.Connection, track_ids: list[int]) -> dict[int, list[dict]]:
+    """트랙별 태그를 canonical style로 해석하고 출처 간 합의 가중치를 붙인다.
+
+    해석되지 않은 자유형 태그(지역·연대·감상 같은 비장르 태그)와 오매칭으로 폐기된
+    Discogs 태그는 유사도에서도 쓰이지 않으므로 화면에도 내보내지 않는다 —
+    유사도가 보는 것과 사람이 보는 것을 같게 유지한다.
+    """
+    discogs, freeform = resolve_styles_by_source(conn)
+
+    resolved: dict[int, list[dict]] = {}
+    for track_id in track_ids:
+        by_discogs = discogs.get(track_id, {})
+        by_freeform = freeform.get(track_id, {})
+        entries = []
+        for style, weight in sorted(agreement_weights(by_discogs, by_freeform).items(), key=lambda kv: -kv[1]):
+            sources = [
+                name
+                for name, styles in (("discogs", by_discogs), ("freeform", by_freeform))
+                if style in styles
+            ]
+            entries.append(
+                {
+                    "style": style,
+                    "weight": round(weight, 3),
+                    "sources": sources,
+                    "confirmed": len(sources) > 1,
+                }
+            )
+        resolved[track_id] = entries
+    return resolved
+
+
+@app.get("/tracks")
+def list_tracks(conn: sqlite3.Connection = Depends(get_db)) -> list[dict]:
+    """트랙 목록을 태그와 함께 반환한다(라이브러리 화면이 트랙마다 태그 칩을 보여줘야 해서)."""
+    rows = conn.execute(f"SELECT {', '.join(TRACK_COLUMNS)} FROM tracks ORDER BY id").fetchall()
+    tracks = [dict(zip(TRACK_COLUMNS, row)) for row in rows]
+
+    tags_by_track = _resolved_tags(conn, [track["id"] for track in tracks])
+    for track in tracks:
+        track["tags"] = tags_by_track[track["id"]]
+    return tracks
+
+
+@app.get("/tracks/{track_id}")
+def get_track(track_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    columns = [*TRACK_COLUMNS, "mb_recording_id"]
+    track = dict(zip(columns, _get_track_row(conn, track_id)))
+    track["tags"] = _resolved_tags(conn, [track_id])[track_id]
+    return track
+
+
+@app.get("/tracks/{track_id}/similar")
+def get_similar(
+    track_id: int,
+    top: int = 5,
+    dig: bool = False,
+    zone_low: float = DEFAULT_ZONE_LOW,
+    zone_high: float = DEFAULT_ZONE_HIGH,
+    boredom_weight: float = 0.0,
+    exclude_tired_above: float | None = None,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> list[dict]:
+    """장르 태그 유사도 기준 유사곡. dig=True면 [zone_low, zone_high] 구간의 디깅 존 탐색."""
+    _get_track_row(conn, track_id)
+    boredom_scores = (
+        compute_boredom_scores(conn) if (boredom_weight > 0 or exclude_tired_above is not None) else None
+    )
+
+    try:
+        if dig:
+            results = find_digging_zone(
+                conn,
+                track_id,
+                top_n=top,
+                zone_low=zone_low,
+                zone_high=zone_high,
+                boredom_scores=boredom_scores,
+                boredom_weight=boredom_weight,
+                exclude_tired_above=exclude_tired_above,
+            )
+        else:
+            results = find_similar(
+                conn,
+                track_id,
+                top_n=top,
+                boredom_scores=boredom_scores,
+                boredom_weight=boredom_weight,
+                exclude_tired_above=exclude_tired_above,
+            )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return [dict(r._asdict()) for r in results]
+
+
+@app.get("/tracks/{track_id}/relations")
+def get_relations(
+    track_id: int,
+    category: str,
+    top: int = 10,
+    include_known: bool = False,
+    exclude_tired_above: float | None = None,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> list[dict]:
+    """협업/레이블/샘플/영향 관계 축을 따라가 발견 후보를 찾는다."""
+    if category not in CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"category는 {CATEGORIES} 중 하나여야 함")
+
+    _, artist, title, *_rest, mb_recording_id = _get_track_row(conn, track_id)
+    boredom_scores = compute_boredom_scores(conn) if exclude_tired_above is not None else None
+
+    return dig_relations(
+        conn,
+        track_id,
+        artist,
+        title,
+        mb_recording_id,
+        category,
+        top_n=top,
+        include_known=include_known,
+        boredom_scores=boredom_scores,
+        exclude_tired_above=exclude_tired_above,
+    )
+
+
+@app.get("/boredom")
+def get_boredom_ranking(top: int = 10, conn: sqlite3.Connection = Depends(get_db)) -> list[dict]:
+    scores = compute_boredom_scores(conn)
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:top]
+    results = []
+    for track_id, score in ranked:
+        row = conn.execute("SELECT artist, title FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        artist, title = row if row else (None, None)
+        results.append({"track_id": track_id, "artist": artist, "title": title, "boredom_score": score})
+    return results
+
+
+class FeedbackIn(BaseModel):
+    track_id: int
+    action: Literal["like", "skip"]
+    context: str | None = None
+    seed_track_id: int | None = None
+
+
+@app.post("/feedback", status_code=201)
+def post_feedback(body: FeedbackIn, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    _get_track_row(conn, body.track_id)
+    if body.seed_track_id is not None:
+        _get_track_row(conn, body.seed_track_id)
+    insert_feedback(conn, body.track_id, body.action, context=body.context, seed_track_id=body.seed_track_id)
+    return {"status": "ok"}
+
+
+@app.get("/feedback")
+def get_feedback_log(top: int = 20, conn: sqlite3.Connection = Depends(get_db)) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT f.id, f.created_at, f.track_id, t.artist, t.title, f.action, f.context,
+               f.seed_track_id, s.artist, s.title
+        FROM feedback f
+        JOIN tracks t ON t.id = f.track_id
+        LEFT JOIN tracks s ON s.id = f.seed_track_id
+        ORDER BY f.created_at DESC
+        LIMIT ?
+        """,
+        (top,),
+    ).fetchall()
+    return [
+        {
+            "id": r[0],
+            "created_at": r[1],
+            "track_id": r[2],
+            "artist": r[3],
+            "title": r[4],
+            "action": r[5],
+            "context": r[6],
+            "seed_track_id": r[7],
+            "seed_artist": r[8],
+            "seed_title": r[9],
+        }
+        for r in rows
+    ]
+
+
+class AnalyzeIn(BaseModel):
+    directory: str
+
+
+@app.post("/analyze")
+def trigger_analyze(body: AnalyzeIn) -> dict:
+    """디렉토리 내 오디오 파일을 분석해 DB에 적재한다(cli.py의 analyze와 동일한 로직 재사용)."""
+    if not Path(body.directory).is_dir():
+        raise HTTPException(status_code=400, detail=f"디렉토리를 찾을 수 없음: {body.directory}")
+    cli_module.analyze_directory(body.directory, DEFAULT_DB_PATH)
+    return {"status": "ok"}
+
+
+@app.post("/enrich")
+def trigger_enrich() -> dict:
+    """DB의 모든 트랙에 Last.fm/MusicBrainz/Discogs 태그를 적재한다."""
+    cli_module.enrich_tracks(DEFAULT_DB_PATH)
+    return {"status": "ok"}
+
+
+@app.post("/collect-relations")
+def trigger_collect_relations() -> dict:
+    """DB의 모든 트랙에 MusicBrainz/Discogs 관계 데이터를 적재한다."""
+    cli_module.collect_relations(DEFAULT_DB_PATH)
+    return {"status": "ok"}
+
+
+@app.post("/sync-listening")
+def trigger_sync_listening() -> dict:
+    """Spotify 최근 재생/상위 청취곡을 동기화한다(최초 호출 시 서버 콘솔에서 브라우저 인증 필요)."""
+    cli_module.sync_listening_history(DEFAULT_DB_PATH)
+    return {"status": "ok"}
+
+
+@app.post("/import-liked")
+def trigger_import_liked(max_items: int = 2000) -> dict:
+    """Spotify 좋아요 곡을 tracks에 적재한다(음향 특성 없이 메타데이터만)."""
+    cli_module.import_liked_songs(DEFAULT_DB_PATH, max_items)
+    return {"status": "ok"}
+
+
+class PlaylistIn(BaseModel):
+    name: str
+    tracks: list[str]
+
+
+@app.post("/playlists")
+def create_playlist_endpoint(body: PlaylistIn, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """트랙 목록을 Spotify 비공개 플레이리스트로 내보낸다(cli.py의 export-playlist와 같은 해석 로직).
+
+    각 트랙은 로컬 DB 매칭 -> 이미 아는 spotify_track_id -> Spotify 검색 순으로 해석되고,
+    못 찾은 트랙은 결과의 tracks 목록에 found=false로 정직하게 남는다(억지 매칭 없음).
+    """
+    if not body.tracks:
+        raise HTTPException(status_code=400, detail="tracks가 비어 있음")
+
+    resolved = []
+    uris = []
+    for query in body.tracks:
+        result = cli_module._resolve_spotify_uri(conn, query)
+        if result is None:
+            resolved.append({"query": query, "found": False})
+            continue
+        uri, artist, title = result
+        resolved.append({"query": query, "found": True, "artist": artist, "title": title})
+        uris.append(uri)
+
+    if not uris:
+        raise HTTPException(status_code=404, detail="Spotify에서 찾은 트랙이 하나도 없음")
+
+    user_id = spotify.get_current_user_id()
+    playlist = spotify.create_playlist(user_id, body.name, description="digger API로 생성한 플레이리스트")
+    spotify.add_tracks(playlist["id"], uris)
+
+    return {
+        "playlist_id": playlist["id"],
+        "playlist_url": (playlist.get("external_urls") or {}).get("spotify", ""),
+        "tracks": resolved,
+    }
+
+
+# 프론트엔드(frontend/)를 같은 오리진에서 서빙 — 별도 CORS 설정 없이
+# `uvicorn digger.api:app` 하나로 UI+API가 함께 뜨게 한다. 위 API 라우트들보다
+# 뒤에 등록해야 "/tracks" 같은 경로가 정적 파일 매칭에 먼저 먹히지 않는다.
+app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")
