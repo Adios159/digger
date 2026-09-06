@@ -8,9 +8,14 @@ from datetime import datetime, timezone
 from typing import Any
 
 SCHEMA = """
+-- file_path가 nullable인 이유: Spotify Liked Songs처럼 로컬 음원이 없는 트랙도
+-- 같은 tracks 테이블에 담기 때문. 이 경우 spotify_track_id가 식별자 역할을 하고
+-- bpm/key/energy는 NULL로 남는다(Essentia 분석 대상이 아니므로). 유사도 계산은
+-- 태그 벡터만 쓰기 때문에(vectorize.py) 음향 특성이 없어도 탐색에 그대로 참여한다.
 CREATE TABLE IF NOT EXISTS tracks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    file_path TEXT NOT NULL UNIQUE,
+    file_path TEXT UNIQUE,
+    spotify_track_id TEXT UNIQUE,
     artist TEXT,
     title TEXT,
     album TEXT,
@@ -112,10 +117,54 @@ def connect(db_path: str) -> sqlite3.Connection:
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
-    """`CREATE TABLE IF NOT EXISTS`로는 반영되지 않는, 기존 테이블에 대한 컬럼 추가를 처리한다."""
+    """`CREATE TABLE IF NOT EXISTS`로는 반영되지 않는, 기존 테이블에 대한 변경을 처리한다."""
     columns = {row[1] for row in conn.execute("PRAGMA table_info(tracks)")}
     if "mb_recording_id" not in columns:
         conn.execute("ALTER TABLE tracks ADD COLUMN mb_recording_id TEXT")
+        columns.add("mb_recording_id")
+
+    if "spotify_track_id" not in columns:
+        _rebuild_tracks_for_non_local_sources(conn)
+
+
+def _rebuild_tracks_for_non_local_sources(conn: sqlite3.Connection) -> None:
+    """기존 tracks의 `file_path NOT NULL` 제약을 풀고 spotify_track_id를 추가한다.
+
+    SQLite는 컬럼 제약 변경을 ALTER TABLE로 못 해서 새 테이블로 옮겨 담는 방식을 쓴다.
+    id 값을 그대로 복사하는 게 핵심 — track_tags/listening_history/top_tracks/feedback이
+    tracks(id)를 참조하고 있어서 id가 바뀌면 기존 태그·피드백이 통째로 끊긴다.
+    """
+    conn.executescript(
+        """
+        CREATE TABLE tracks_migrated (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_path TEXT UNIQUE,
+            spotify_track_id TEXT UNIQUE,
+            artist TEXT,
+            title TEXT,
+            album TEXT,
+            bpm REAL,
+            key TEXT,
+            key_scale TEXT,
+            energy REAL,
+            duration_sec REAL,
+            raw_features TEXT,
+            analyzed_at TEXT NOT NULL,
+            mb_recording_id TEXT
+        );
+
+        INSERT INTO tracks_migrated (
+            id, file_path, artist, title, album, bpm, key, key_scale, energy,
+            duration_sec, raw_features, analyzed_at, mb_recording_id
+        )
+        SELECT id, file_path, artist, title, album, bpm, key, key_scale, energy,
+               duration_sec, raw_features, analyzed_at, mb_recording_id
+        FROM tracks;
+
+        DROP TABLE tracks;
+        ALTER TABLE tracks_migrated RENAME TO tracks;
+        """
+    )
 
 
 _UPSERT_TAG_SQL = """
@@ -166,6 +215,44 @@ def upsert_track(conn: sqlite3.Connection, track: dict[str, Any]) -> None:
         "analyzed_at": datetime.now(timezone.utc).isoformat(),
     }
     conn.execute(_UPSERT_SQL, row)
+    conn.commit()
+
+
+_UPSERT_SPOTIFY_TRACK_SQL = """
+INSERT INTO tracks (spotify_track_id, artist, title, album, duration_sec, analyzed_at)
+VALUES (:spotify_track_id, :artist, :title, :album, :duration_sec, :analyzed_at)
+ON CONFLICT(spotify_track_id) DO UPDATE SET
+    artist=excluded.artist,
+    title=excluded.title,
+    album=excluded.album,
+    duration_sec=excluded.duration_sec,
+    analyzed_at=excluded.analyzed_at;
+"""
+
+
+def upsert_spotify_tracks(conn: sqlite3.Connection, tracks: list[dict[str, Any]]) -> None:
+    """로컬 음원 없이 Spotify 메타데이터만 있는 트랙을 spotify_track_id 기준으로 저장한다.
+
+    bpm/key/energy는 Essentia 분석 대상이 아니라 NULL로 남고, analyzed_at은 이 행을
+    마지막으로 가져온 시각으로 쓴다. 이미 같은 곡을 로컬 파일로 분석해 둔 경우에도
+    (file_path 기준 행과) 별도 행이 되는데, 그건 어느 쪽이 같은 곡인지 추측하지 않고
+    정직하게 따로 두는 쪽을 택한 것 — 매칭은 아티스트/제목 기준 별도 작업으로 다룬다.
+    """
+    fetched_at = datetime.now(timezone.utc).isoformat()
+    rows = [
+        {
+            "spotify_track_id": track["spotify_track_id"],
+            "artist": track.get("artist"),
+            "title": track.get("title"),
+            "album": track.get("album"),
+            "duration_sec": track.get("duration_sec"),
+            "analyzed_at": fetched_at,
+        }
+        for track in tracks
+    ]
+    if not rows:
+        return
+    conn.executemany(_UPSERT_SPOTIFY_TRACK_SQL, rows)
     conn.commit()
 
 

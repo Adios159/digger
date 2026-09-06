@@ -21,7 +21,7 @@ from .. import config
 AUTH_URL = "https://accounts.spotify.com/authorize"
 TOKEN_URL = "https://accounts.spotify.com/api/token"
 API_BASE_URL = "https://api.spotify.com/v1"
-SCOPES = "user-read-recently-played user-top-read playlist-modify-private"
+SCOPES = "user-read-recently-played user-top-read playlist-modify-private user-library-read"
 TOKEN_CACHE_PATH = Path(".spotify_token.json")
 
 # Spotify는 Discogs/MusicBrainz와 달리 고정 요청 간격이 아니라 429 + Retry-After
@@ -232,6 +232,26 @@ def get_recently_played(limit: int = 50, max_items: int = 200) -> list[dict[str,
         if not next_before:
             break
         before = int(next_before)
+    return items[:max_items]
+
+
+def get_saved_tracks(limit: int = 50, max_items: int = 2000) -> list[dict[str, Any]]:
+    """"좋아요 표시한 곡"(라이브러리에 저장한 트랙)을 최근 저장순으로 조회한다.
+
+    각 항목은 added_at과 track 객체를 가진다. 저장 곡은 수천 곡까지 갈 수 있어
+    max_items로 상한을 둔다.
+    """
+    items: list[dict[str, Any]] = []
+    offset = 0
+    while len(items) < max_items:
+        data = _request("me/tracks", {"limit": min(limit, 50), "offset": offset})
+        page_items = data.get("items", [])
+        if not page_items:
+            break
+        items.extend(page_items)
+        offset += len(page_items)
+        if not data.get("next"):
+            break
     return items[:max_items]
 
 

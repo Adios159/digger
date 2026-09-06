@@ -37,9 +37,21 @@ function formatDuration(sec) {
 }
 
 function initials(artist) {
-  const words = artist.trim().split(/\s+/);
+  const words = (artist || "?").trim().split(/\s+/);
   const letters = words.length === 1 ? words[0].slice(0, 2) : words.slice(0, 2).map((w) => w[0]).join("");
   return letters.toUpperCase();
+}
+
+/* Spotify에서 가져온 트랙은 로컬 음원이 없어 bpm/key/energy가 비어 있다.
+   없는 값은 "-"로 채우지 않고 칩 자체를 빼되, 왜 없는지는 명시한다. */
+function statChips(track) {
+  const chips = [];
+  if (track.bpm != null) chips.push(`${track.bpm.toFixed(1)} BPM`);
+  if (track.key) chips.push(`${track.key} ${track.key_scale || ""}`.trim());
+  if (track.energy != null) chips.push(`energy ${track.energy.toFixed(2)}`);
+  if (track.duration_sec != null) chips.push(formatDuration(track.duration_sec));
+  if (track.bpm == null) chips.push("음원 미분석");
+  return chips.map((chip) => `<span class="stat-chip">${chip}</span>`).join("");
 }
 
 /* ---------- 라이브러리 탭 ---------- */
@@ -53,12 +65,7 @@ function renderLibrary() {
       <div class="track-body">
         <h3 class="track-title">${t.title}</h3>
         <p class="track-artist">${t.artist} · ${t.album}</p>
-        <div class="track-stats">
-          <span class="stat-chip">${t.bpm.toFixed(1)} BPM</span>
-          <span class="stat-chip">${t.key} ${t.key_scale}</span>
-          <span class="stat-chip">energy ${t.energy.toFixed(2)}</span>
-          <span class="stat-chip">${formatDuration(t.duration_sec)}</span>
-        </div>
+        <div class="track-stats">${statChips(t)}</div>
         <div class="tag-row">
           ${t.tags.map((tag) => `
             <span class="tag-chip" title="${tag.source}">
@@ -246,12 +253,7 @@ async function renderTrackModal(track) {
       </div>
     </div>
 
-    <div class="track-stats">
-      <span class="stat-chip">${track.bpm.toFixed(1)} BPM</span>
-      <span class="stat-chip">${track.key} ${track.key_scale}</span>
-      <span class="stat-chip">energy ${track.energy.toFixed(2)}</span>
-      <span class="stat-chip">${formatDuration(track.duration_sec)}</span>
-    </div>
+    <div class="track-stats">${statChips(track)}</div>
 
     <div class="modal-section">
       <div class="modal-section-label">장르 태그 (${track.tags.length})</div>
