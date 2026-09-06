@@ -61,8 +61,26 @@ def _local_track_id_for_name(conn: sqlite3.Connection, name: str) -> int | None:
     return row[0] if row else None
 
 
-def _dig_collab(conn: sqlite3.Connection, artist: str, title: str, to_id: str, to_name: str) -> list[dict]:
-    """협업자(프로듀서/작곡가/엔지니어 등)가 참여한 다른 레코딩을 찾는다."""
+def _dig_collab(
+    conn: sqlite3.Connection, artist: str, title: str, to_id: str | None, to_name: str, relation_type: str
+) -> list[dict]:
+    """협업자(프로듀서/작곡가/엔지니어 등)가 참여한 다른 레코딩을 찾는다.
+
+    mbid가 없으면(Discogs 크레딧) 추가 탐색은 못 하지만, "이 곡의 프로듀서가 누구인지"
+    자체가 사람 축 정보라 레이블과 같은 방식으로 결과에 남긴다.
+    """
+    if not to_id:
+        return [
+            {
+                "relation_type": relation_type,
+                "path": f"{artist} - {title} 의 {relation_type}: {to_name} (mbid 없음 — 추가 탐색 생략)",
+                "entity_type": "artist",
+                "entity_name": to_name,
+                "entity_mbid": None,
+                "already_known": _is_known_locally(conn, to_name),
+            }
+        ]
+
     results = []
     for rel in musicbrainz.get_artist_recording_credits(to_id):
         rel_type = (rel.get("type") or "").lower()
@@ -148,9 +166,9 @@ def dig_relations(
 
     results: list[dict] = []
     for relation_type, to_entity_type, to_id, to_name in matches:
-        if category == "collab" and to_id:
+        if category == "collab":
             try:
-                results += _dig_collab(conn, artist, title, to_id, to_name)
+                results += _dig_collab(conn, artist, title, to_id, to_name, relation_type)
             except Exception as e:
                 print(f"    {to_name} 관련 조회 실패, 건너뜀: {e}", file=sys.stderr)
         elif category == "label":
