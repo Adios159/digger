@@ -22,6 +22,7 @@ from .db import (
 )
 from .graph import dig_relations
 from .metadata import discogs, lastfm, musicbrainz, spotify
+from .metadata.query import lookup_terms
 from .relations import CATEGORIES, COLLAB_KEYWORDS, INFLUENCE_KEYWORDS, SAMPLE_KEYWORDS
 from .similarity import (
     DEFAULT_ZONE_HIGH,
@@ -68,7 +69,7 @@ def _make_tag(
 
 
 def _discogs_tags(artist: str, title: str) -> list[dict]:
-    release = discogs.search_release(artist, title)
+    release = discogs.search_release(*lookup_terms(artist, title))
     if not release:
         return []
     tags = [_make_tag("discogs", "genre", g, canonical_style=g) for g in release.get("genre", [])]
@@ -77,7 +78,7 @@ def _discogs_tags(artist: str, title: str) -> list[dict]:
 
 
 def _lastfm_tags(artist: str, title: str) -> list[dict]:
-    tags = lastfm.get_top_tags(artist, title)
+    tags = lastfm.get_top_tags(*lookup_terms(artist, title))
     return [
         _make_tag(
             "lastfm",
@@ -91,7 +92,7 @@ def _lastfm_tags(artist: str, title: str) -> list[dict]:
 
 
 def _musicbrainz_tags(artist: str, title: str) -> list[dict]:
-    recording = musicbrainz.search_recording(artist, title)
+    recording = musicbrainz.search_recording(*lookup_terms(artist, title))
     if not recording:
         return []
     tags = musicbrainz.get_tags(recording["id"])
@@ -232,7 +233,7 @@ def _normalize_artist_relations(artist_mbid: str, artist_name: str, raw_relation
 
 def _musicbrainz_relations(conn, track_id: int, artist: str, title: str) -> list[dict]:
     """레코딩을 찾아 mbid를 저장하고, 협업(프로듀서·작곡가·엔지니어)·샘플·레이블·영향 관계를 조회한다."""
-    recording = musicbrainz.search_recording(artist, title)
+    recording = musicbrainz.search_recording(*lookup_terms(artist, title))
     if not recording:
         print("    MusicBrainz에서 레코딩을 찾지 못함, 건너뜀", file=sys.stderr)
         return []
@@ -267,7 +268,8 @@ def _discogs_relations(track_id: int, artist: str, title: str) -> list[dict]:
     그 자리는 MusicBrainz mbid를 담는 칸이고 Discogs 아티스트 id를 넣으면 탐색 단계에서
     엉뚱한 mbid 조회가 되기 때문이다(원본 id는 attributes에 남긴다).
     """
-    release = discogs.search_release(artist, title)
+    search_artist, search_title = lookup_terms(artist, title)
+    release = discogs.search_release(search_artist, search_title)
     if not release:
         return []
 
@@ -290,7 +292,7 @@ def _discogs_relations(track_id: int, artist: str, title: str) -> list[dict]:
         {**base, "relation_type": credit["role"], "to_entity_type": "artist",
          "to_entity_name": credit["name"],
          "attributes": [f"discogs_artist_id:{credit['discogs_artist_id']}"] if credit.get("discogs_artist_id") else []}
-        for credit in discogs.get_credits(release["id"], title)
+        for credit in discogs.get_credits(release["id"], search_title)
         if any(keyword in credit["role"].lower() for keyword in COLLAB_KEYWORDS)
     ]
     return relations
