@@ -13,7 +13,11 @@ import sqlite3
 
 from fastapi import Depends, FastAPI, HTTPException
 
+from .boredom import compute_boredom_scores
 from .db import connect
+from .graph import dig_relations
+from .relations import CATEGORIES
+from .similarity import DEFAULT_ZONE_HIGH, DEFAULT_ZONE_LOW, find_digging_zone, find_similar
 
 DEFAULT_DB_PATH = "digger.db"
 
@@ -62,3 +66,77 @@ def get_track(track_id: int, conn: sqlite3.Connection = Depends(get_db)) -> dict
         {"source": s, "tag_type": t, "raw_tag": r, "weight": w, "canonical_style": c} for s, t, r, w, c in tags
     ]
     return track
+
+
+@app.get("/tracks/{track_id}/similar")
+def get_similar(
+    track_id: int,
+    top: int = 5,
+    dig: bool = False,
+    zone_low: float = DEFAULT_ZONE_LOW,
+    zone_high: float = DEFAULT_ZONE_HIGH,
+    boredom_weight: float = 0.0,
+    exclude_tired_above: float | None = None,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> list[dict]:
+    """장르 태그 유사도 기준 유사곡. dig=True면 [zone_low, zone_high] 구간의 디깅 존 탐색."""
+    _get_track_row(conn, track_id)
+    boredom_scores = (
+        compute_boredom_scores(conn) if (boredom_weight > 0 or exclude_tired_above is not None) else None
+    )
+
+    try:
+        if dig:
+            results = find_digging_zone(
+                conn,
+                track_id,
+                top_n=top,
+                zone_low=zone_low,
+                zone_high=zone_high,
+                boredom_scores=boredom_scores,
+                boredom_weight=boredom_weight,
+                exclude_tired_above=exclude_tired_above,
+            )
+        else:
+            results = find_similar(
+                conn,
+                track_id,
+                top_n=top,
+                boredom_scores=boredom_scores,
+                boredom_weight=boredom_weight,
+                exclude_tired_above=exclude_tired_above,
+            )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return [dict(r._asdict()) for r in results]
+
+
+@app.get("/tracks/{track_id}/relations")
+def get_relations(
+    track_id: int,
+    category: str,
+    top: int = 10,
+    include_known: bool = False,
+    exclude_tired_above: float | None = None,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> list[dict]:
+    """협업/레이블/샘플/영향 관계 축을 따라가 발견 후보를 찾는다."""
+    if category not in CATEGORIES:
+        raise HTTPException(status_code=400, detail=f"category는 {CATEGORIES} 중 하나여야 함")
+
+    _, artist, title, *_rest, mb_recording_id = _get_track_row(conn, track_id)
+    boredom_scores = compute_boredom_scores(conn) if exclude_tired_above is not None else None
+
+    return dig_relations(
+        conn,
+        track_id,
+        artist,
+        title,
+        mb_recording_id,
+        category,
+        top_n=top,
+        include_known=include_known,
+        boredom_scores=boredom_scores,
+        exclude_tired_above=exclude_tired_above,
+    )
