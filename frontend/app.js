@@ -4,6 +4,8 @@
 let TRACKS = [];
 let BOREDOM = {};
 
+const CATEGORY_LABELS = { collab: "협업", label: "레이블", samples: "샘플", influence: "영향" };
+
 const trackById = (id) => TRACKS.find((t) => t.id === id);
 
 async function fetchJSON(url) {
@@ -149,15 +151,33 @@ async function renderSimilar() {
 
 let activeCategory = "collab";
 
+const ENTITY_TYPE_LABELS = { artist: "아티스트", recording: "레코딩", label: "레이블", track: "트랙" };
+
+/* dig_relations가 돌려주는 관계 한 건을 배지로 요약한다.
+   entity_mbid가 없으면 graph.py가 한 단계 더 들어가지 못하고 멈춘 결과다
+   (Discogs 크레딧/레이블) — 왜 후보가 얕은지 화면에서 바로 알 수 있게 표시한다. */
+function relationBadges(r) {
+  const badges = [];
+  const entityLabel = ENTITY_TYPE_LABELS[r.entity_type] || r.entity_type;
+  if (entityLabel) badges.push(`<span class="rel-badge rel-badge-type">${entityLabel}</span>`);
+  if (r.relation_type) badges.push(`<span class="rel-badge">${r.relation_type}</span>`);
+  if (!r.entity_mbid) badges.push(`<span class="rel-badge rel-badge-muted" title="MusicBrainz id가 없어 이 지점에서 탐색이 멈춤">mbid 없음</span>`);
+  if (r.already_known) badges.push(`<span class="known-badge">이미 아는 곡/아티스트</span>`);
+  return badges.join("");
+}
+
 async function renderRelations() {
   const seedId = Number(document.getElementById("rel-seed-select").value);
   const seed = trackById(seedId);
   const includeKnown = document.getElementById("include-known-toggle").checked;
+  const excludeTired = document.getElementById("rel-exclude-tired-toggle").checked ? 3.0 : null;
 
-  renderSeedBanner(document.getElementById("rel-seed-banner"), seed, ` · 카테고리=${activeCategory}`);
+  const bannerExtra = `${CATEGORY_LABELS[activeCategory]} 축${excludeTired != null ? " · 질림 3.0 초과 제외" : ""}`;
+  renderSeedBanner(document.getElementById("rel-seed-banner"), seed, ` · ${bannerExtra}`);
 
   const list = document.getElementById("relations-results");
   const params = new URLSearchParams({ category: activeCategory, top: "50", include_known: includeKnown });
+  if (excludeTired != null) params.set("exclude_tired_above", excludeTired);
 
   let items;
   try {
@@ -172,13 +192,21 @@ async function renderRelations() {
     return;
   }
 
+  /* 질림 스코어는 exclude_tired_above를 넘겼을 때만 백엔드가 계산한다
+     (안 넘기면 전부 0.0) — 계산되지 않은 0을 "안 질림"으로 오해하지 않게 그때만 그린다. */
   list.innerHTML = items.map((r, i) => `
     <div class="result-row glass">
       <div class="result-rank">${i + 1}</div>
       <div class="result-main">
-        <div class="result-title">${r.entity_name}${r.already_known ? '<span class="known-badge">이미 아는 곡/아티스트</span>' : ""}</div>
+        <div class="result-title">${r.entity_name}${relationBadges(r)}</div>
         <div class="result-sub">${r.path}</div>
       </div>
+      ${excludeTired != null ? `
+        <div class="boredom-meter">
+          <div class="boredom-bar"><div class="boredom-fill" style="width:${Math.min(r.boredom_score / excludeTired * 100, 100).toFixed(0)}%"></div></div>
+          <span class="boredom-val">${r.boredom_score.toFixed(2)}</span>
+        </div>
+      ` : ""}
     </div>
   `).join("");
 }
@@ -214,8 +242,6 @@ function renderBoredom() {
 }
 
 /* ---------- 트랙 상세 모달 ---------- */
-
-const CATEGORY_LABELS = { collab: "협업", label: "레이블", samples: "샘플", influence: "영향" };
 
 async function renderTrackModal(track) {
   const boredom = BOREDOM[track.id];
@@ -367,6 +393,7 @@ function setupRelationsControls() {
   });
 
   document.getElementById("include-known-toggle").addEventListener("change", renderRelations);
+  document.getElementById("rel-exclude-tired-toggle").addEventListener("change", renderRelations);
 }
 
 document.addEventListener("DOMContentLoaded", async () => {

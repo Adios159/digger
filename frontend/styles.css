@@ -491,6 +491,28 @@ input[type="range"]::-moz-range-thumb {
   text-overflow: ellipsis;
 }
 
+.rel-badge {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border-soft);
+  color: var(--text-dim);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.rel-badge-type {
+  background: var(--green-soft);
+  border-color: rgba(30,215,96,0.28);
+  color: var(--green);
+}
+
+.rel-badge-muted {
+  color: var(--text-faint);
+  border-style: dashed;
+}
+
 .known-badge {
   font-size: 10px;
   padding: 2px 8px;
