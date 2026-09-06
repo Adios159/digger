@@ -16,6 +16,7 @@ from .db import (
     update_track_mbid,
     upsert_listening_history,
     upsert_relations,
+    upsert_spotify_tracks,
     upsert_track,
     upsert_track_tags,
 )
@@ -324,6 +325,43 @@ def _match_local_track(conn, artist: str, title: str) -> int | None:
         (artist, title),
     ).fetchall()
     return rows[0][0] if len(rows) == 1 else None
+
+
+def import_liked_songs(db_path: str = DEFAULT_DB_PATH, max_items: int = 2000) -> None:
+    """Spotify에서 "좋아요" 표시한 곡을 tracks 테이블에 적재한다.
+
+    로컬 음원이 없어 Essentia 음향 특성(bpm/key/energy)은 비워두지만, 유사도는 태그
+    기반이라 이어서 enrich(태그) → collect-relations(관계)를 태우면 similar/dig-relations에
+    그대로 참여한다.
+    """
+    conn = connect(db_path)
+
+    print("좋아요 표시한 곡 조회 중...")
+    items = spotify.get_saved_tracks(max_items=max_items)
+
+    rows = []
+    skipped = 0
+    for item in items:
+        track = item.get("track") or {}
+        if not track.get("id"):
+            skipped += 1  # 사용자가 라이브러리에 넣은 로컬 파일은 Spotify id가 없음
+            continue
+        duration_ms = track.get("duration_ms")
+        rows.append(
+            {
+                "spotify_track_id": track["id"],
+                "artist": ", ".join(a["name"] for a in track.get("artists", [])),
+                "title": track.get("name"),
+                "album": (track.get("album") or {}).get("name"),
+                "duration_sec": duration_ms / 1000 if duration_ms else None,
+            }
+        )
+
+    upsert_spotify_tracks(conn, rows)
+    if skipped:
+        print(f"    Spotify id가 없는 곡 {skipped}개는 건너뜀(라이브러리에 추가된 로컬 파일)", file=sys.stderr)
+    print(f"완료: {len(rows)}곡을 {db_path}에 저장함")
+    print("다음 단계: enrich로 태그를 채워야 유사도 탐색에 반영됨")
 
 
 def sync_listening_history(db_path: str = DEFAULT_DB_PATH) -> None:
@@ -708,6 +746,14 @@ def main() -> None:
     )
     sync_listening_parser.add_argument("--db", default=DEFAULT_DB_PATH)
 
+    import_liked_parser = subparsers.add_parser(
+        "import-liked", help="Spotify에서 좋아요 표시한 곡을 tracks에 적재(음향 특성 없이 메타데이터만)"
+    )
+    import_liked_parser.add_argument("--db", default=DEFAULT_DB_PATH)
+    import_liked_parser.add_argument(
+        "--max", type=int, default=2000, dest="max_items", help="가져올 최대 곡 수 (기본 2000)"
+    )
+
     boredom_parser = subparsers.add_parser("boredom", help="청취 이력 기반 질림 스코어 랭킹 출력")
     boredom_parser.add_argument("--top", type=int, default=10, dest="top_n")
     boredom_parser.add_argument("--db", default=DEFAULT_DB_PATH)
@@ -774,6 +820,8 @@ def main() -> None:
         )
     elif args.command == "sync-listening":
         sync_listening_history(args.db)
+    elif args.command == "import-liked":
+        import_liked_songs(args.db, args.max_items)
     elif args.command == "boredom":
         boredom_ranking(args.top_n, args.db)
     elif args.command == "dig-relations":
