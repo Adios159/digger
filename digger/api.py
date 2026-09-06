@@ -10,11 +10,13 @@ Postgres 이관은 과함. CLI와 나란히 쓰는 두 번째 인터페이스로
 from __future__ import annotations
 
 import sqlite3
+from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException
+from pydantic import BaseModel
 
 from .boredom import compute_boredom_scores
-from .db import connect
+from .db import connect, insert_feedback
 from .graph import dig_relations
 from .relations import CATEGORIES
 from .similarity import DEFAULT_ZONE_HIGH, DEFAULT_ZONE_LOW, find_digging_zone, find_similar
@@ -140,3 +142,62 @@ def get_relations(
         boredom_scores=boredom_scores,
         exclude_tired_above=exclude_tired_above,
     )
+
+
+@app.get("/boredom")
+def get_boredom_ranking(top: int = 10, conn: sqlite3.Connection = Depends(get_db)) -> list[dict]:
+    scores = compute_boredom_scores(conn)
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:top]
+    results = []
+    for track_id, score in ranked:
+        row = conn.execute("SELECT artist, title FROM tracks WHERE id = ?", (track_id,)).fetchone()
+        artist, title = row if row else (None, None)
+        results.append({"track_id": track_id, "artist": artist, "title": title, "boredom_score": score})
+    return results
+
+
+class FeedbackIn(BaseModel):
+    track_id: int
+    action: Literal["like", "skip"]
+    context: str | None = None
+    seed_track_id: int | None = None
+
+
+@app.post("/feedback", status_code=201)
+def post_feedback(body: FeedbackIn, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    _get_track_row(conn, body.track_id)
+    if body.seed_track_id is not None:
+        _get_track_row(conn, body.seed_track_id)
+    insert_feedback(conn, body.track_id, body.action, context=body.context, seed_track_id=body.seed_track_id)
+    return {"status": "ok"}
+
+
+@app.get("/feedback")
+def get_feedback_log(top: int = 20, conn: sqlite3.Connection = Depends(get_db)) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT f.id, f.created_at, f.track_id, t.artist, t.title, f.action, f.context,
+               f.seed_track_id, s.artist, s.title
+        FROM feedback f
+        JOIN tracks t ON t.id = f.track_id
+        LEFT JOIN tracks s ON s.id = f.seed_track_id
+        ORDER BY f.created_at DESC
+        LIMIT ?
+        """,
+        (top,),
+    ).fetchall()
+    return [
+        {
+            "id": r[0],
+            "created_at": r[1],
+            "track_id": r[2],
+            "artist": r[3],
+            "title": r[4],
+            "action": r[5],
+            "context": r[6],
+            "seed_track_id": r[7],
+            "seed_artist": r[8],
+            "seed_title": r[9],
+        }
+        for r in rows
+    ]
