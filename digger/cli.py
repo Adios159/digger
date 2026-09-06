@@ -13,12 +13,12 @@ from .db import (
     connect,
     insert_feedback,
     replace_top_tracks,
+    replace_track_tags,
     update_track_mbid,
     upsert_listening_history,
     upsert_relations,
     upsert_spotify_tracks,
     upsert_track,
-    upsert_track_tags,
 )
 from .graph import dig_relations
 from .metadata import discogs, lastfm, musicbrainz, spotify
@@ -121,6 +121,7 @@ def enrich_tracks(db_path: str = DEFAULT_DB_PATH) -> None:
             print("    아티스트 정보 없음, 건너뜀", file=sys.stderr)
             continue
         tags: list[dict] = []
+        fetched_sources: list[str] = []
         for label, fetch in (
             ("discogs", _discogs_tags),
             ("lastfm", _lastfm_tags),
@@ -129,11 +130,13 @@ def enrich_tracks(db_path: str = DEFAULT_DB_PATH) -> None:
             try:
                 fetched = fetch(artist, title)
                 tags += fetched
+                fetched_sources.append(label)
                 print(f"    {label}: {len(fetched)}개 태그")
             except Exception as e:
                 print(f"    {label} 조회 실패: {e}", file=sys.stderr)
 
-        upsert_track_tags(conn, track_id, tags)
+        # 실패한 소스의 기존 태그는 건드리지 않고, 성공한 소스만 이번 결과로 교체
+        replace_track_tags(conn, track_id, fetched_sources, tags)
     print(f"완료: {len(rows)}곡의 태그를 {db_path}에 저장함")
 
 

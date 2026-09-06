@@ -177,11 +177,26 @@ ON CONFLICT(track_id, source, tag_type, raw_tag) DO UPDATE SET
 """
 
 
-def upsert_track_tags(conn: sqlite3.Connection, track_id: int, tags: list[dict[str, Any]]) -> None:
-    """트랙 하나에 대한 태그 목록을 저장한다(있으면 갱신).
+def replace_track_tags(
+    conn: sqlite3.Connection, track_id: int, fetched_sources: list[str], tags: list[dict[str, Any]]
+) -> None:
+    """조회에 성공한 소스의 태그를 이번 결과로 통째로 교체한다.
+
+    upsert만 하면 지난 실행에서 잘못 붙은 태그가 영원히 남는다 — 아티스트 오매칭으로
+    한국 랩 곡에 들어온 "Polka" 같은 것들은 재수집해도 안 지워졌다.
+
+    그렇다고 무조건 지우면 MusicBrainz 503처럼 일시적으로 실패한 소스의 멀쩡한 기존
+    태그까지 날아가므로, `fetched_sources`(이번에 조회가 성공한 소스)에 한해서만 지운다.
+    결과가 0건인 것과 조회가 실패한 것은 다른 상태라는 뜻이기도 하다.
 
     tags의 각 항목은 source, tag_type, raw_tag, weight(선택), canonical_style(선택) 키를 가진다.
     """
+    if fetched_sources:
+        conn.executemany(
+            "DELETE FROM track_tags WHERE track_id = ? AND source = ?",
+            [(track_id, source) for source in fetched_sources],
+        )
+
     fetched_at = datetime.now(timezone.utc).isoformat()
     rows = [
         {
