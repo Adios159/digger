@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
@@ -16,6 +17,10 @@ from .. import config
 BASE_URL = "https://api.discogs.com"
 _MIN_INTERVAL = 1.1  # 인증된 요청 분당 60회 제한 대비 여유
 _last_request_time = 0.0
+
+# 컴필레이션 후보는 트랙리스트 확인에 추가 요청이 들어가므로 검사할 후보 수를 제한한다
+_MAX_CANDIDATES = 5
+_VARIOUS_ARTISTS_KEYS = {"various", "variousartists"}
 
 
 def _request(path: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -35,21 +40,57 @@ def _request(path: str, params: dict[str, Any]) -> dict[str, Any]:
     return response.json()
 
 
-def search_release(artist: str, title: str) -> dict[str, Any] | None:
-    """아티스트+트랙 제목으로 검색해 최상위 결과(genre/style 포함)를 반환한다.
+def _match_key(name: str) -> str:
+    """비교용 키: Discogs 표기 장식을 걷어내고 영숫자만 남긴다.
 
-    `artist`/`track` 필드로 엄격 검색하면 컴필레이션 릴리즈(release 아티스트가
-    "Various"로 등록된 경우)를 놓치므로, 통합 텍스트 쿼리(`q`)로 느슨하게 검색한다.
-    대신 느슨한 검색이 엉뚱한 결과를 상위에 올릴 수 있으므로, 결과의 `title`에
-    요청한 아티스트명이 실제로 포함된 경우에만 채택하고 아니면 공백(None)으로 남긴다.
+    Discogs는 동명이인을 "No Brain (2)"처럼 번호로 구분하고, 표기가 다른 크레딧에는
+    "Lil' Wayne*"처럼 별표를 붙인다. 둘 다 같은 아티스트로 취급해야 한다.
     """
-    data = _request(
-        "database/search",
-        {"q": f"{artist} {title}", "type": "release"},
-    )
-    results = data.get("results", [])
-    artist_lower = artist.strip().lower()
-    for result in results:
-        if artist_lower in result.get("title", "").lower():
+    name = re.sub(r"\s*\(\d+\)\s*$", "", name.strip()).rstrip("*")
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def _release_artist_key(release_title: str) -> str:
+    """Discogs 릴리즈 제목("아티스트 - 릴리즈명")에서 아티스트 구간만 뽑는다."""
+    return _match_key(release_title.split(" - ", 1)[0])
+
+
+def _release_has_track(release_id: int, artist: str, title: str) -> bool:
+    """컴필레이션 후보의 트랙리스트에 우리 곡이 실제로 들어 있는지 확인한다.
+
+    릴리즈 아티스트가 "Various"면 제목만으로는 우리 곡이 실린 판인지 알 수 없어
+    상세를 한 번 더 조회한다(요청이 늘어나므로 컴필레이션 후보에 대해서만).
+    """
+    detail = _request(f"releases/{release_id}", {})
+    artist_key, title_key = _match_key(artist), _match_key(title)
+    for track in detail.get("tracklist", []):
+        if _match_key(track.get("title", "")) != title_key:
+            continue
+        track_artists = {_match_key(a.get("name", "")) for a in track.get("artists") or []}
+        # 트랙별 아티스트를 안 적어둔 릴리즈도 있어 그 경우엔 제목 일치로 인정한다
+        if not track_artists or artist_key in track_artists:
+            return True
+    return False
+
+
+def search_release(artist: str, title: str) -> dict[str, Any] | None:
+    """아티스트+트랙 제목으로 검색해 아티스트가 확인된 릴리즈를 반환한다.
+
+    `artist`/`track` 필드로 엄격 검색해도 Discogs가 유사 이름으로 퍼지 매칭을 해버려서
+    (한국 아티스트 "Marv" -> "Marv Herzog"의 폴카 앨범) 검색 방식만으로는 못 거른다.
+    게다가 엄격 검색은 컴필레이션(릴리즈 아티스트가 "Various")을 놓친다.
+
+    그래서 통합 텍스트 쿼리(`q`)로 느슨하게 찾은 뒤 결과를 직접 검증한다:
+    릴리즈 제목의 아티스트 구간이 정확히 일치하거나, "Various"인 경우 트랙리스트에
+    우리 곡이 실제로 있어야 채택한다. 확인이 안 되면 억지로 고르지 않고 공백으로 남긴다.
+    """
+    data = _request("database/search", {"q": f"{artist} {title}", "type": "release"})
+    artist_key = _match_key(artist)
+
+    for result in data.get("results", [])[:_MAX_CANDIDATES]:
+        release_artist_key = _release_artist_key(result.get("title", ""))
+        if release_artist_key == artist_key:
+            return result
+        if release_artist_key in _VARIOUS_ARTISTS_KEYS and _release_has_track(result["id"], artist, title):
             return result
     return None
