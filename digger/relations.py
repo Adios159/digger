@@ -7,7 +7,11 @@ MusicBrainz 관계 타입은 커뮤니티가 자유롭게 붙이는 문자열이
 
 from __future__ import annotations
 
-COLLAB_KEYWORDS = ("produc", "compos", "engineer", "mix", "master", "arrang", "program", "remix", "lyric")
+# "writ"은 Discogs의 "Written-By"(작곡·작사)와 MusicBrainz의 "writer"를 함께 잡는다 —
+# 비영어권 곡에서 가장 아쉬운 크레딧이라 빠뜨리면 사람 축이 그만큼 빈다.
+COLLAB_KEYWORDS = (
+    "produc", "compos", "engineer", "mix", "master", "arrang", "program", "remix", "lyric", "writ",
+)
 SAMPLE_KEYWORDS = ("sampl",)
 INFLUENCE_KEYWORDS = ("influenc",)
 
