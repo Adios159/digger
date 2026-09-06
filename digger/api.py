@@ -20,6 +20,7 @@ from . import cli as cli_module
 from .boredom import compute_boredom_scores
 from .db import connect, insert_feedback
 from .graph import dig_relations
+from .metadata import spotify
 from .relations import CATEGORIES
 from .similarity import DEFAULT_ZONE_HIGH, DEFAULT_ZONE_LOW, find_digging_zone, find_similar
 
@@ -237,3 +238,43 @@ def trigger_sync_listening() -> dict:
     """Spotify 최근 재생/상위 청취곡을 동기화한다(최초 호출 시 서버 콘솔에서 브라우저 인증 필요)."""
     cli_module.sync_listening_history(DEFAULT_DB_PATH)
     return {"status": "ok"}
+
+
+class PlaylistIn(BaseModel):
+    name: str
+    tracks: list[str]
+
+
+@app.post("/playlists")
+def create_playlist_endpoint(body: PlaylistIn, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+    """트랙 목록을 Spotify 비공개 플레이리스트로 내보낸다(cli.py의 export-playlist와 같은 해석 로직).
+
+    각 트랙은 로컬 DB 매칭 -> 이미 아는 spotify_track_id -> Spotify 검색 순으로 해석되고,
+    못 찾은 트랙은 결과의 tracks 목록에 found=false로 정직하게 남는다(억지 매칭 없음).
+    """
+    if not body.tracks:
+        raise HTTPException(status_code=400, detail="tracks가 비어 있음")
+
+    resolved = []
+    uris = []
+    for query in body.tracks:
+        result = cli_module._resolve_spotify_uri(conn, query)
+        if result is None:
+            resolved.append({"query": query, "found": False})
+            continue
+        uri, artist, title = result
+        resolved.append({"query": query, "found": True, "artist": artist, "title": title})
+        uris.append(uri)
+
+    if not uris:
+        raise HTTPException(status_code=404, detail="Spotify에서 찾은 트랙이 하나도 없음")
+
+    user_id = spotify.get_current_user_id()
+    playlist = spotify.create_playlist(user_id, body.name, description="digger API로 생성한 플레이리스트")
+    spotify.add_tracks(playlist["id"], uris)
+
+    return {
+        "playlist_id": playlist["id"],
+        "playlist_url": (playlist.get("external_urls") or {}).get("spotify", ""),
+        "tracks": resolved,
+    }
