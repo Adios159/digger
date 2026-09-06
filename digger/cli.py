@@ -12,6 +12,8 @@ from .boredom import compute_boredom_scores
 from .db import (
     connect,
     insert_feedback,
+    mark_track_enriched,
+    mark_track_relations_collected,
     replace_top_tracks,
     replace_track_tags,
     update_track_mbid,
@@ -118,12 +120,27 @@ def get_enrich_progress() -> dict:
     return dict(ENRICH_PROGRESS)
 
 
-def enrich_tracks(db_path: str = DEFAULT_DB_PATH) -> None:
-    """DB의 모든 트랙에 대해 Last.fm/MusicBrainz/Discogs 태그를 조회해 적재한다."""
+def enrich_tracks(db_path: str = DEFAULT_DB_PATH, force: bool = False) -> None:
+    """DB의 트랙에 대해 Last.fm/MusicBrainz/Discogs 태그를 조회해 적재한다.
+
+    기본적으로 이전 실행에서 태그 조회에 성공한(enriched_at이 찍힌) 트랙은 건너뛴다 —
+    소스별 rate limit(Discogs 1.1초, MusicBrainz 1초) 때문에 매번 전체를 다시 돌면
+    트랙 수에 비례해 느려지고, 새로 들어온 트랙 몇 개를 위해 몇 분씩 기다려야 했다.
+    crosswalk.yaml 갱신 후 재정규화처럼 전체를 다시 돌아야 할 때는 force=True로 넘긴다.
+    """
     conn = connect(db_path)
-    rows = conn.execute("SELECT id, artist, title FROM tracks").fetchall()
-    if not rows:
+    all_count = conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+    if all_count == 0:
         print("DB에 트랙이 없음. 먼저 analyze를 실행할 것", file=sys.stderr)
+        return
+
+    query = "SELECT id, artist, title FROM tracks" if force else "SELECT id, artist, title FROM tracks WHERE enriched_at IS NULL"
+    rows = conn.execute(query).fetchall()
+    skipped = all_count - len(rows)
+    if skipped:
+        print(f"이미 태그가 있는 {skipped}곡은 건너뜀(전체 재실행하려면 --force)")
+    if not rows:
+        print("새로 조회할 트랙이 없음")
         return
 
     ENRICH_PROGRESS.update(running=True, current=0, total=len(rows), artist=None, title=None)
@@ -151,6 +168,10 @@ def enrich_tracks(db_path: str = DEFAULT_DB_PATH) -> None:
 
             # 실패한 소스의 기존 태그는 건드리지 않고, 성공한 소스만 이번 결과로 교체
             replace_track_tags(conn, track_id, fetched_sources, tags)
+            if fetched_sources:
+                # 하나라도 성공해야 다음 실행에서 건너뛴다 — 전부 실패(네트워크 문제 등)한
+                # 트랙은 enriched_at을 남기지 않아 다음 실행에서 자동으로 재시도된다.
+                mark_track_enriched(conn, track_id)
     finally:
         ENRICH_PROGRESS["running"] = False
     print(f"완료: {len(rows)}곡의 태그를 {db_path}에 저장함")
@@ -313,36 +334,72 @@ def _discogs_relations(track_id: int, artist: str, title: str) -> list[dict]:
     return relations
 
 
-def collect_relations(db_path: str = DEFAULT_DB_PATH) -> None:
-    """DB의 모든 트랙에 대해 MusicBrainz 협업/레이블/샘플/영향 관계 + Discogs 레이블 관계를 적재한다."""
+# api.py가 폴링으로 읽어가는 collect-relations 진행 상태. ENRICH_PROGRESS와 같은 이유로 둔다.
+RELATIONS_PROGRESS: dict = {"running": False, "current": 0, "total": 0, "artist": None, "title": None}
+
+
+def get_relations_progress() -> dict:
+    return dict(RELATIONS_PROGRESS)
+
+
+def collect_relations(db_path: str = DEFAULT_DB_PATH, force: bool = False) -> None:
+    """트랙에 대해 MusicBrainz 협업/레이블/샘플/영향 관계 + Discogs 레이블 관계를 적재한다.
+
+    enrich_tracks와 같은 이유로, 기본적으로 이전에 관계 조회가 성공한(relations_collected_at이
+    찍힌) 트랙은 건너뛴다. 전체를 다시 모아야 할 때는 force=True로 넘긴다.
+    """
     conn = connect(db_path)
-    rows = conn.execute("SELECT id, artist, title FROM tracks").fetchall()
-    if not rows:
+    all_count = conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
+    if all_count == 0:
         print("DB에 트랙이 없음. 먼저 analyze를 실행할 것", file=sys.stderr)
         return
 
-    for i, (track_id, artist, title) in enumerate(rows, start=1):
-        print(f"[{i}/{len(rows)}] 관계 조회 중: {artist} - {title}")
-        if not artist:
-            print("    아티스트 정보 없음, 건너뜀", file=sys.stderr)
-            continue
+    query = (
+        "SELECT id, artist, title FROM tracks"
+        if force
+        else "SELECT id, artist, title FROM tracks WHERE relations_collected_at IS NULL"
+    )
+    rows = conn.execute(query).fetchall()
+    skipped = all_count - len(rows)
+    if skipped:
+        print(f"이미 관계를 모은 {skipped}곡은 건너뜀(전체 재실행하려면 --force)")
+    if not rows:
+        print("새로 조회할 트랙이 없음")
+        return
 
-        relations: list[dict] = []
-        try:
-            fetched = _musicbrainz_relations(conn, track_id, artist, title)
-            relations += fetched
-            print(f"    musicbrainz: {len(fetched)}개 관계")
-        except Exception as e:
-            print(f"    musicbrainz 조회 실패: {e}", file=sys.stderr)
+    RELATIONS_PROGRESS.update(running=True, current=0, total=len(rows), artist=None, title=None)
+    try:
+        for i, (track_id, artist, title) in enumerate(rows, start=1):
+            RELATIONS_PROGRESS.update(current=i, artist=artist, title=title)
+            print(f"[{i}/{len(rows)}] 관계 조회 중: {artist} - {title}")
+            if not artist:
+                print("    아티스트 정보 없음, 건너뜀", file=sys.stderr)
+                continue
 
-        try:
-            fetched = _discogs_relations(track_id, artist, title)
-            relations += fetched
-            print(f"    discogs: {len(fetched)}개 관계")
-        except Exception as e:
-            print(f"    discogs 조회 실패: {e}", file=sys.stderr)
+            relations: list[dict] = []
+            any_success = False
+            try:
+                fetched = _musicbrainz_relations(conn, track_id, artist, title)
+                relations += fetched
+                any_success = True
+                print(f"    musicbrainz: {len(fetched)}개 관계")
+            except Exception as e:
+                print(f"    musicbrainz 조회 실패: {e}", file=sys.stderr)
 
-        upsert_relations(conn, relations)
+            try:
+                fetched = _discogs_relations(track_id, artist, title)
+                relations += fetched
+                any_success = True
+                print(f"    discogs: {len(fetched)}개 관계")
+            except Exception as e:
+                print(f"    discogs 조회 실패: {e}", file=sys.stderr)
+
+            upsert_relations(conn, relations)
+            if any_success:
+                # 하나라도 성공해야 다음 실행에서 건너뛴다 — 전부 실패한 트랙은 다음 실행에서 재시도된다.
+                mark_track_relations_collected(conn, track_id)
+    finally:
+        RELATIONS_PROGRESS["running"] = False
     print(f"완료: {len(rows)}곡의 관계를 {db_path}에 저장함")
 
 
@@ -398,47 +455,63 @@ def import_liked_songs(db_path: str = DEFAULT_DB_PATH, max_items: int = 2000) ->
     print("다음 단계: enrich로 태그를 채워야 유사도 탐색에 반영됨")
 
 
+# collect_relations/enrich와 달리 트랙 단위가 아니라 "최근 재생 + 상위 청취곡 3개 구간"
+# 4단계짜리 작업이라, 진행 상태도 트랙 수 대신 단계(stage) 기준으로 남긴다.
+SYNC_LISTENING_STAGES = ["recently_played", *SPOTIFY_TOP_TRACK_RANGES]
+SYNC_LISTENING_PROGRESS: dict = {"running": False, "current": 0, "total": len(SYNC_LISTENING_STAGES), "stage": None}
+
+
+def get_sync_listening_progress() -> dict:
+    return dict(SYNC_LISTENING_PROGRESS)
+
+
 def sync_listening_history(db_path: str = DEFAULT_DB_PATH) -> None:
     """Spotify 최근 재생 + 상위 청취곡(short/medium/long_term)을 동기화한다."""
     conn = connect(db_path)
 
-    print("최근 재생 이력 조회 중...")
-    recently_played = spotify.get_recently_played()
-    history_rows = []
-    for item in recently_played:
-        track = item.get("track") or {}
-        artist = ", ".join(a["name"] for a in track.get("artists", []))
-        title = track.get("name")
-        history_rows.append(
-            {
-                "spotify_track_id": track.get("id"),
-                "artist": artist,
-                "title": title,
-                "played_at": item["played_at"],
-                "track_id": _match_local_track(conn, artist, title) if artist and title else None,
-            }
-        )
-    upsert_listening_history(conn, history_rows)
-    print(f"    {len(history_rows)}건 저장")
-
-    for time_range in SPOTIFY_TOP_TRACK_RANGES:
-        print(f"상위 청취곡({time_range}) 조회 중...")
-        top_tracks = spotify.get_top_tracks(time_range=time_range)
-        top_rows = []
-        for rank, track in enumerate(top_tracks, start=1):
+    SYNC_LISTENING_PROGRESS.update(running=True, current=0, total=len(SYNC_LISTENING_STAGES), stage=None)
+    try:
+        SYNC_LISTENING_PROGRESS.update(current=1, stage="recently_played")
+        print("최근 재생 이력 조회 중...")
+        recently_played = spotify.get_recently_played()
+        history_rows = []
+        for item in recently_played:
+            track = item.get("track") or {}
             artist = ", ".join(a["name"] for a in track.get("artists", []))
             title = track.get("name")
-            top_rows.append(
+            history_rows.append(
                 {
                     "spotify_track_id": track.get("id"),
                     "artist": artist,
                     "title": title,
-                    "rank": rank,
+                    "played_at": item["played_at"],
                     "track_id": _match_local_track(conn, artist, title) if artist and title else None,
                 }
             )
-        replace_top_tracks(conn, time_range, top_rows)
-        print(f"    {len(top_rows)}건 저장")
+        upsert_listening_history(conn, history_rows)
+        print(f"    {len(history_rows)}건 저장")
+
+        for i, time_range in enumerate(SPOTIFY_TOP_TRACK_RANGES, start=2):
+            SYNC_LISTENING_PROGRESS.update(current=i, stage=time_range)
+            print(f"상위 청취곡({time_range}) 조회 중...")
+            top_tracks = spotify.get_top_tracks(time_range=time_range)
+            top_rows = []
+            for rank, track in enumerate(top_tracks, start=1):
+                artist = ", ".join(a["name"] for a in track.get("artists", []))
+                title = track.get("name")
+                top_rows.append(
+                    {
+                        "spotify_track_id": track.get("id"),
+                        "artist": artist,
+                        "title": title,
+                        "rank": rank,
+                        "track_id": _match_local_track(conn, artist, title) if artist and title else None,
+                    }
+                )
+            replace_top_tracks(conn, time_range, top_rows)
+            print(f"    {len(top_rows)}건 저장")
+    finally:
+        SYNC_LISTENING_PROGRESS["running"] = False
 
     print(f"완료: 청취 이력을 {db_path}에 저장함")
 
@@ -744,11 +817,17 @@ def main() -> None:
 
     enrich_parser = subparsers.add_parser("enrich", help="DB의 트랙에 Last.fm/MusicBrainz/Discogs 태그 적재")
     enrich_parser.add_argument("--db", default=DEFAULT_DB_PATH)
+    enrich_parser.add_argument(
+        "--force", action="store_true", help="이미 태그가 있는 트랙도 포함해 전체를 다시 조회"
+    )
 
     collect_relations_parser = subparsers.add_parser(
         "collect-relations", help="DB의 트랙에 MusicBrainz 협업/레이블/샘플/영향 관계 적재"
     )
     collect_relations_parser.add_argument("--db", default=DEFAULT_DB_PATH)
+    collect_relations_parser.add_argument(
+        "--force", action="store_true", help="이미 관계를 모은 트랙도 포함해 전체를 다시 조회"
+    )
 
     similar_parser = subparsers.add_parser("similar", help="장르 태그 유사도 기반 유사곡 탐색")
     similar_parser.add_argument("seed", help="시드 트랙의 id 또는 아티스트/제목 일부")
@@ -838,9 +917,9 @@ def main() -> None:
     if args.command == "analyze":
         analyze_directory(args.directory, args.db)
     elif args.command == "enrich":
-        enrich_tracks(args.db)
+        enrich_tracks(args.db, force=args.force)
     elif args.command == "collect-relations":
-        collect_relations(args.db)
+        collect_relations(args.db, force=args.force)
     elif args.command == "similar":
         similar_tracks(
             args.seed,

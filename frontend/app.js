@@ -428,6 +428,30 @@ function renderBoredom() {
 /* api.py의 배치 트리거 엔드포인트들. 전부 동기라 응답이 올 때까지 요청이 열려 있고,
    enrich/collect-relations는 외부 소스 rate limit(Discogs 1.1초, MusicBrainz 1초)
    때문에 트랙 수에 비례해 몇 분씩 걸린다. 화면은 그 사실을 숨기지 않는다. */
+/* enrich/collect-relations는 진행 상태가 {current, total, artist, title} 모양으로 같아서
+   포맷터를 공유한다. sync-listening은 트랙 단위가 아니라 "최근 재생 + 상위 청취곡 3구간"
+   4단계짜리라 {current, total, stage} 모양이라 별도 포맷터를 쓴다. */
+const formatTrackProgress = (p, sec) => {
+  if (!p.total) return null;
+  const pct = Math.round((p.current / p.total) * 100);
+  const who = p.artist ? ` — ${p.artist}${p.title ? " - " + p.title : ""}` : "";
+  return { pct, text: `${p.current}/${p.total}곡 처리 중 (${pct}%, ${sec}초)${who}` };
+};
+
+const SYNC_LISTENING_STAGE_LABELS = {
+  recently_played: "최근 재생 이력",
+  short_term: "상위 청취곡 (4주)",
+  medium_term: "상위 청취곡 (6개월)",
+  long_term: "상위 청취곡 (전체 기간)",
+};
+
+const formatSyncListeningProgress = (p, sec) => {
+  if (!p.total) return null;
+  const pct = Math.round((p.current / p.total) * 100);
+  const label = SYNC_LISTENING_STAGE_LABELS[p.stage] || p.stage || "";
+  return { pct, text: `${p.current}/${p.total}단계 처리 중 (${pct}%, ${sec}초) — ${label}` };
+};
+
 const PIPELINES = [
   {
     key: "analyze",
@@ -439,19 +463,27 @@ const PIPELINES = [
   {
     key: "enrich",
     title: "enrich",
-    desc: "모든 트랙에 Discogs → Last.fm → MusicBrainz 순으로 장르 태그를 조회해 적재. 소스별 rate limit 때문에 트랙 수에 비례해 오래 걸림.",
-    request: () => ["/enrich", undefined],
+    desc: "Discogs → Last.fm → MusicBrainz 순으로 장르 태그를 조회해 적재. 이미 태그가 있는 트랙은 기본적으로 건너뛰고 새 트랙만 처리함(외부 소스 rate limit 때문에 매번 전체를 돌면 트랙 수에 비례해 느려짐). crosswalk.yaml을 고쳐서 재정규화가 필요하면 아래 체크박스로 전체 재실행.",
+    force: true,
+    progressUrl: "/enrich/progress",
+    formatProgress: formatTrackProgress,
+    request: (_v, force) => [`/enrich${force ? "?force=true" : ""}`, undefined],
   },
   {
     key: "collect-relations",
     title: "collect-relations",
-    desc: "MusicBrainz/Discogs에서 협업·레이블·샘플·영향 관계를 모아 relations에 적재. 관계 탐험 탭이 이 데이터를 씀.",
-    request: () => ["/collect-relations", undefined],
+    desc: "MusicBrainz/Discogs에서 협업·레이블·샘플·영향 관계를 모아 relations에 적재. 이미 관계를 모은 트랙은 기본적으로 건너뛰고 새 트랙만 처리함. 전체를 다시 모으려면 아래 체크박스로 전체 재실행.",
+    force: true,
+    progressUrl: "/collect-relations/progress",
+    formatProgress: formatTrackProgress,
+    request: (_v, force) => [`/collect-relations${force ? "?force=true" : ""}`, undefined],
   },
   {
     key: "sync-listening",
     title: "sync-listening",
     desc: "Spotify 최근 재생/상위 청취곡을 동기화해 질림 스코어의 근거를 갱신. 최초 실행이면 서버 콘솔에서 브라우저 인증이 필요함.",
+    progressUrl: "/sync-listening/progress",
+    formatProgress: formatSyncListeningProgress,
     request: () => ["/sync-listening", undefined],
   },
   {
@@ -477,7 +509,7 @@ function renderPipelinePanel() {
         <div class="pipeline-title">${p.title}</div>
         <p class="pipeline-desc">${p.desc}</p>
         <div id="pipeline-status-${p.key}" class="pipeline-status">대기 중</div>
-        ${p.key === "enrich"
+        ${p.progressUrl
           ? `<div class="pipeline-progress" id="pipeline-progress-${p.key}" hidden>
                <div class="pipeline-progress-bar"></div>
              </div>`
@@ -488,6 +520,12 @@ function renderPipelinePanel() {
           ? `<label class="pipeline-input">
                <span>${p.input.label}</span>
                <input id="${pipelineInputId(p.key)}" type="${p.input.type}" value="${p.input.value}">
+             </label>`
+          : ""}
+        ${p.force
+          ? `<label class="pipeline-checkbox">
+               <input type="checkbox" id="pipeline-force-${p.key}">
+               <span>전체 재실행</span>
              </label>`
           : ""}
         <button class="primary-btn pipeline-run" onclick="runPipeline('${p.key}')">실행</button>
@@ -519,13 +557,15 @@ async function reloadAllViews() {
   renderBoredom();
 }
 
-/* enrich는 /enrich 요청이 끝날 때까지 응답이 없는 동기 엔드포인트라, 진행률을 보려면
-   실행 중에 별도로 GET /enrich/progress를 폴링해야 한다(api.py의 ENRICH_PROGRESS 참고). */
+/* enrich/collect-relations/sync-listening은 요청이 끝날 때까지 응답이 없는 동기
+   엔드포인트라, 진행률을 보려면 실행 중에 별도로 GET .../progress를 폴링해야 한다
+   (api.py의 ENRICH_PROGRESS/RELATIONS_PROGRESS/SYNC_LISTENING_PROGRESS 참고). */
 async function runPipeline(key) {
   if (pipelineRunning) return;
   const spec = PIPELINES.find((p) => p.key === key);
   const inputEl = spec.input ? document.getElementById(pipelineInputId(key)) : null;
-  const [url, body] = spec.request(inputEl ? inputEl.value.trim() : null);
+  const forceEl = spec.force ? document.getElementById(`pipeline-force-${key}`) : null;
+  const [url, body] = spec.request(inputEl ? inputEl.value.trim() : null, forceEl ? forceEl.checked : false);
 
   const status = document.getElementById(`pipeline-status-${key}`);
   const progressEl = document.getElementById(`pipeline-progress-${key}`);
@@ -534,14 +574,13 @@ async function runPipeline(key) {
   const elapsed = () => Math.round((Date.now() - startedAt) / 1000);
 
   const tickPlain = () => { status.textContent = `실행 중... ${elapsed()}초 경과`; };
-  const tickEnrichProgress = async () => {
+  const tickWithProgress = async () => {
     try {
-      const p = await fetchJSON("/enrich/progress");
-      if (p.total > 0) {
-        const pct = Math.round((p.current / p.total) * 100);
-        progressBar.style.width = `${pct}%`;
-        const who = p.artist ? ` — ${p.artist}${p.title ? " - " + p.title : ""}` : "";
-        status.textContent = `${p.current}/${p.total}곡 처리 중 (${pct}%, ${elapsed()}초)${who}`;
+      const p = await fetchJSON(spec.progressUrl);
+      const info = spec.formatProgress(p, elapsed());
+      if (info) {
+        progressBar.style.width = `${info.pct}%`;
+        status.textContent = info.text;
         return;
       }
     } catch { /* 폴링 한 번 실패는 무시하고 다음 틱에서 재시도 */ }
@@ -552,7 +591,7 @@ async function runPipeline(key) {
     progressEl.hidden = false;
     progressBar.style.width = "0%";
   }
-  const poll = progressEl ? tickEnrichProgress : tickPlain;
+  const poll = progressEl ? tickWithProgress : tickPlain;
   const tick = setInterval(poll, 1000);
 
   pipelineRunning = true;
