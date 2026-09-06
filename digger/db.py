@@ -73,6 +73,15 @@ CREATE TABLE IF NOT EXISTS relations (
     fetched_at TEXT NOT NULL,
     UNIQUE(source, relation_type, from_entity_type, from_entity_id, to_entity_type, to_entity_key)
 );
+
+CREATE TABLE IF NOT EXISTS feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    track_id INTEGER NOT NULL REFERENCES tracks(id),
+    action TEXT NOT NULL,
+    context TEXT,
+    seed_track_id INTEGER REFERENCES tracks(id),
+    created_at TEXT NOT NULL
+);
 """
 
 _UPSERT_SQL = """
@@ -274,4 +283,26 @@ def upsert_relations(conn: sqlite3.Connection, relations: list[dict[str, Any]]) 
     if not rows:
         return
     conn.executemany(_UPSERT_RELATION_SQL, rows)
+    conn.commit()
+
+
+def insert_feedback(
+    conn: sqlite3.Connection,
+    track_id: int,
+    action: str,
+    context: str | None = None,
+    seed_track_id: int | None = None,
+) -> None:
+    """트랙에 대한 좋아요/스킵 피드백을 한 건 기록한다.
+
+    같은 트랙에 대한 반복 피드백도 listening_history처럼 각각 별도 이벤트로 쌓는다 —
+    "예전엔 스킵했는데 최근엔 좋아함" 같은 시계열 신호를 나중에 협업 필터링에 쓰기 위함.
+    """
+    conn.execute(
+        """
+        INSERT INTO feedback (track_id, action, context, seed_track_id, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (track_id, action, context, seed_track_id, datetime.now(timezone.utc).isoformat()),
+    )
     conn.commit()
