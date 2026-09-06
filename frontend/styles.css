@@ -294,9 +294,10 @@ h1, h2, h3 {
 }
 
 .tag-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-.tag-dot-discogs { background: #d4a94a; }
-.tag-dot-lastfm { background: #d4506a; }
-.tag-dot-musicbrainz { background: #4aa8d4; }
+/* 출처별 색이 아니라 합의 여부로 구분한다 — 어느 API가 말했는지보다
+   두 출처가 함께 지목했는지가 실제로 믿을 만한 신호라서. */
+.tag-dot-confirmed { background: var(--green); box-shadow: 0 0 6px var(--green-glow); }
+.tag-dot-single { background: var(--text-faint); }
 
 /* ---------- 탐색 / 관계 탐험 공통 레이아웃 ---------- */
 
