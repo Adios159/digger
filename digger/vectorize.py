@@ -115,11 +115,37 @@ def _build_tag_block(
     return names, tag_vecs
 
 
-def build_feature_blocks(conn: sqlite3.Connection) -> FeatureBlocks:
-    """DB의 모든 트랙에 대해 태그 벡터 블록을 만든다."""
+_cache: dict[str, FeatureBlocks] = {}
+
+
+def invalidate_cache() -> None:
+    """analyze/enrich/import-liked처럼 tracks/track_tags를 바꾸는 작업 뒤에 호출해 캐시를 비운다."""
+    _cache.clear()
+
+
+def _cache_key(conn: sqlite3.Connection) -> str:
+    return conn.execute("PRAGMA database_list").fetchone()[2]
+
+
+def build_feature_blocks(conn: sqlite3.Connection, use_cache: bool = True) -> FeatureBlocks:
+    """DB의 모든 트랙에 대해 태그 벡터 블록을 만든다.
+
+    API 서버는 요청마다 새 커넥션을 열기 때문에(digger/api.py의 get_db), 매 유사도
+    조회마다 이 함수가 처음부터 다시 불렸다 — track_tags 전체를 읽고 crosswalk까지
+    재해석하는 비용이 매번 들었다는 뜻. tracks/track_tags가 실제로 바뀌기 전까지는
+    같은 결과이므로 DB 파일 경로 기준으로 프로세스 내에 캐싱해두고, invalidate_cache()가
+    호출되기 전까지는 재사용한다.
+    """
+    cache_key = _cache_key(conn) if use_cache else None
+    if cache_key is not None and cache_key in _cache:
+        return _cache[cache_key]
+
     track_ids = [row[0] for row in conn.execute("SELECT id FROM tracks").fetchall()]
 
     tag_names, tag_vecs = _build_tag_block(conn, track_ids)
     tag_vectors = {tid: np.array(tag_vecs[tid], dtype=float) for tid in track_ids}
 
-    return FeatureBlocks(tag_names=tag_names, tag_vectors=tag_vectors)
+    blocks = FeatureBlocks(tag_names=tag_names, tag_vectors=tag_vectors)
+    if cache_key is not None:
+        _cache[cache_key] = blocks
+    return blocks

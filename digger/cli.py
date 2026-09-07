@@ -33,6 +33,7 @@ from .similarity import (
     find_digging_zone,
     find_similar,
 )
+from .vectorize import invalidate_cache
 
 AUDIO_EXTENSIONS = {".flac", ".mp3", ".wav"}
 DEFAULT_DB_PATH = "digger.db"
@@ -52,6 +53,7 @@ def analyze_directory(directory: str, db_path: str = DEFAULT_DB_PATH) -> None:
         track = analyze_track(str(path))
         upsert_track(conn, track)
         print(f"    -> artist={track['artist']!r} bpm={track['bpm']:.1f} key={track['key']} {track['key_scale']}")
+    invalidate_cache()
     print(f"완료: {len(files)}곡을 {db_path}에 저장함")
 
 
@@ -182,6 +184,7 @@ def enrich_tracks(db_path: str = DEFAULT_DB_PATH, force: bool = False) -> None:
                 mark_track_enriched(conn, track_id)
     finally:
         ENRICH_PROGRESS["running"] = False
+        invalidate_cache()
     print(f"완료: {len(rows)}곡의 태그를 {db_path}에 저장함")
 
 
@@ -457,6 +460,7 @@ def import_liked_songs(db_path: str = DEFAULT_DB_PATH, max_items: int = 2000) ->
         )
 
     upsert_spotify_tracks(conn, rows)
+    invalidate_cache()
     if skipped:
         print(f"    Spotify id가 없는 곡 {skipped}개는 건너뜀(라이브러리에 추가된 로컬 파일)", file=sys.stderr)
     print(f"완료: {len(rows)}곡을 {db_path}에 저장함")
