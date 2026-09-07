@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 프로젝트 개요
 
-내가 실제로 좋아하는 곡의 음향적·맥락적 특성을 분석해 아직 모르는 인접곡/아티스트를 찾아주는 개인용 음악 디깅 도구. Python CLI 프로토타입에 FastAPI 레이어(`digger/api.py`)를 얹은 단계이며, DB는 아직 SQLite를 그대로 씀 — 데이터 규모가 실제로 커지면 PostgreSQL(+pgvector)로 옮겨갈 계획이다 (자세한 배경은 `AI_음악_디깅_앱_기획서 (1).md` 참고).
+내가 실제로 좋아하는 곡의 음향적·맥락적 특성을 분석해 아직 모르는 인접곡/아티스트를 찾아주는 개인용 음악 디깅 도구. Python CLI 프로토타입에 FastAPI 레이어(`digger/api.py`)를 얹은 단계이며, DB는 아직 SQLite를 그대로 씀 — 데이터 규모가 실제로 커지면 PostgreSQL(+pgvector)로 옮겨갈 계획이다 (자세한 배경은 `docs/AI_음악_디깅_앱_기획서.md` 참고).
 
 ## 실행 환경 / 명령어
 
