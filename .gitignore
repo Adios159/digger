@@ -26,6 +26,7 @@ env/
 *.db
 *.sqlite
 *.sqlite3
+backups/
 
 # 환경 변수 / 시크릿
 .env
