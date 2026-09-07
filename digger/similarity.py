@@ -70,17 +70,27 @@ def _boredom_penalty_factor(boredom_score: float, boredom_weight: float) -> floa
     return 1 - boredom_weight * normalized
 
 
+class _RankedCandidate(NamedTuple):
+    track_id: int
+    similarity: float
+    boredom_score: float
+
+
 def _rank_all(
     conn: sqlite3.Connection,
     seed_track_id: int,
     boredom_scores: dict[int, float] | None = None,
     boredom_weight: float = DEFAULT_BOREDOM_WEIGHT,
     exclude_tired_above: float | None = None,
-) -> list[SimilarTrack]:
+) -> tuple[object, list[_RankedCandidate]]:
     """시드 트랙 대비 다른 모든 트랙의 태그 유사도를 계산해 내림차순으로 반환한다.
 
     boredom_weight > 0이면 질림 스코어가 높은 트랙의 유사도를 깎아 순위를 낮추고,
     exclude_tired_above가 주어지면 그 값을 넘는 트랙은 아예 후보에서 제외한다.
+
+    여기서는 순위(랭킹)만 계산한다 — 트랙 레이블 조회와 기여 태그 계산(둘 다 트랙마다
+    개별 처리라 비용이 있음)은 결과를 top_n/존으로 자르고 난 뒤 호출자가 필요한 만큼만
+    `_to_similar_tracks`로 채운다.
     """
     blocks = build_feature_blocks(conn)
     if seed_track_id not in blocks.tag_vectors:
@@ -88,7 +98,7 @@ def _rank_all(
 
     other_ids = [tid for tid in blocks.tag_vectors if tid != seed_track_id]
     if not other_ids:
-        return []
+        return blocks, []
 
     tag_matrix = np.array([blocks.tag_vectors[tid] for tid in other_ids])
     scores = _pairwise_cosine(blocks.tag_vectors[seed_track_id], tag_matrix)
@@ -104,16 +114,21 @@ def _rank_all(
         rank_key = lambda i: scores[i]  # noqa: E731
     ranked_idx = sorted(candidate_idx, key=rank_key, reverse=True)
 
+    ranked = [
+        _RankedCandidate(other_ids[i], float(scores[i]), boredom_scores.get(other_ids[i], 0.0))
+        for i in ranked_idx
+    ]
+    return blocks, ranked
+
+
+def _to_similar_tracks(
+    conn: sqlite3.Connection, blocks, seed_track_id: int, ranked: list[_RankedCandidate]
+) -> list[SimilarTrack]:
     results = []
-    for idx in ranked_idx:
-        track_id = other_ids[idx]
-        artist, title = _track_label(conn, track_id)
-        top_features = _top_contributing_tags(blocks, seed_track_id, track_id)
-        results.append(
-            SimilarTrack(
-                track_id, artist, title, float(scores[idx]), top_features, boredom_scores.get(track_id, 0.0)
-            )
-        )
+    for r in ranked:
+        artist, title = _track_label(conn, r.track_id)
+        top_features = _top_contributing_tags(blocks, seed_track_id, r.track_id)
+        results.append(SimilarTrack(r.track_id, artist, title, r.similarity, top_features, r.boredom_score))
     return results
 
 
@@ -126,7 +141,8 @@ def find_similar(
     exclude_tired_above: float | None = None,
 ) -> list[SimilarTrack]:
     """시드 트랙과 태그 유사도가 높은 순으로 다른 트랙을 랭킹한다."""
-    return _rank_all(conn, seed_track_id, boredom_scores, boredom_weight, exclude_tired_above)[:top_n]
+    blocks, ranked = _rank_all(conn, seed_track_id, boredom_scores, boredom_weight, exclude_tired_above)
+    return _to_similar_tracks(conn, blocks, seed_track_id, ranked[:top_n])
 
 
 def find_digging_zone(
@@ -144,6 +160,6 @@ def find_digging_zone(
     최근접 이웃만 계속 추천하면 이미 아는 것과 비슷한 곡만 나오는 필터버블
     위험이 있어서(기획서 7-4), 일부러 "적당히 먼" 구간에서 후보를 뽑는다.
     """
-    ranked = _rank_all(conn, seed_track_id, boredom_scores, boredom_weight, exclude_tired_above)
-    zone = [r for r in ranked if zone_low <= r.similarity <= zone_high]
-    return zone[:top_n]
+    blocks, ranked = _rank_all(conn, seed_track_id, boredom_scores, boredom_weight, exclude_tired_above)
+    zone = [r for r in ranked if zone_low <= r.similarity <= zone_high][:top_n]
+    return _to_similar_tracks(conn, blocks, seed_track_id, zone)
