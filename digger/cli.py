@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import crosswalk
@@ -127,6 +128,10 @@ def enrich_tracks(db_path: str = DEFAULT_DB_PATH, force: bool = False) -> None:
     소스별 rate limit(Discogs 1.1초, MusicBrainz 1초) 때문에 매번 전체를 다시 돌면
     트랙 수에 비례해 느려지고, 새로 들어온 트랙 몇 개를 위해 몇 분씩 기다려야 했다.
     crosswalk.yaml 갱신 후 재정규화처럼 전체를 다시 돌아야 할 때는 force=True로 넘긴다.
+
+    트랙 간(1번곡 -> 2번곡)은 여전히 순차 실행이지만, 한 트랙 안에서 discogs/lastfm/
+    musicbrainz 세 소스는 rate limiter가 서로 독립적이라 스레드로 동시에 호출한다 —
+    트랙당 대기시간이 세 소스 대기시간의 합이 아니라 가장 느린 소스 하나로 줄어든다.
     """
     conn = connect(db_path)
     all_count = conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0]
@@ -153,13 +158,16 @@ def enrich_tracks(db_path: str = DEFAULT_DB_PATH, force: bool = False) -> None:
                 continue
             tags: list[dict] = []
             fetched_sources: list[str] = []
-            for label, fetch in (
+            sources = (
                 ("discogs", _discogs_tags),
                 ("lastfm", _lastfm_tags),
                 ("musicbrainz", _musicbrainz_tags),
-            ):
+            )
+            with ThreadPoolExecutor(max_workers=len(sources)) as executor:
+                futures = {label: executor.submit(fetch, artist, title) for label, fetch in sources}
+            for label, _fetch in sources:
                 try:
-                    fetched = fetch(artist, title)
+                    fetched = futures[label].result()
                     tags += fetched
                     fetched_sources.append(label)
                     print(f"    {label}: {len(fetched)}개 태그")
