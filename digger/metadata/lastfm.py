@@ -47,6 +47,20 @@ def _request(method: str, **params: str) -> dict[str, Any]:
     return data
 
 
+def get_similar_tracks(artist: str, title: str, limit: int = 10) -> list[dict[str, Any]]:
+    """트랙 단위 유사곡(Last.fm 자체 알고리즘)을 조회한다. name/artist/match를 담은 dict 목록.
+
+    미청취 곡 발굴의 후보 소스로 쓴다 — 여기서 나온 후보가 진짜 취향에 맞는지는
+    이 함수가 아니라 우리 태그 벡터 유사도(similarity.py)로 다시 판단한다.
+    트랙을 모른다는 응답(error 6)은 get_top_tags와 같은 이유로 예외 대신 빈 목록으로 처리한다.
+    """
+    try:
+        data = _request("track.getSimilar", artist=artist, track=title, limit=str(limit))
+    except NotFound:
+        return []
+    return data.get("similartracks", {}).get("track", [])
+
+
 def get_top_tags(artist: str, title: str) -> list[dict[str, Any]]:
     """트랙 단위 태그(name, count 0~100)를 조회한다. 없으면 아티스트 단위로 폴백.
 
