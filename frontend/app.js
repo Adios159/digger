@@ -206,6 +206,7 @@ async function renderSimilar() {
   const zoneHigh = Number(document.getElementById("zone-high").value);
   const boredomWeight = Number(document.getElementById("boredom-weight").value);
   const excludeTired = document.getElementById("exclude-tired-toggle").checked ? 3.0 : null;
+  const includeUnheard = document.getElementById("include-unheard-toggle").checked;
 
   renderSeedBanner(document.getElementById("seed-banner"), seed, digMode ? ` · 디깅 존 ${zoneLow.toFixed(2)}~${zoneHigh.toFixed(2)}` : "");
 
@@ -217,6 +218,7 @@ async function renderSimilar() {
   }
   if (boredomWeight > 0) params.set("boredom_weight", boredomWeight);
   if (excludeTired != null) params.set("exclude_tired_above", excludeTired);
+  if (includeUnheard) params.set("include_unheard", "true");
 
   const list = document.getElementById("similar-results");
   let ranked;
@@ -232,25 +234,32 @@ async function renderSimilar() {
     return;
   }
 
-  list.innerHTML = ranked.map((r, i) => `
-    <div class="result-row glass" onclick="openTrackModal(${r.track_id})">
+  list.innerHTML = ranked.map((r, i) => {
+    // 미청취 후보(already_heard=false)는 로컬 track_id가 없어서(discovery.py) 모달/피드백을
+    // 못 붙인다 — 대신 배지로 구분 표시하고, 내보내기는 "아티스트 - 제목" 문자열 자체를
+    // 키로 써서 /playlists의 Spotify 검색 폴백(cli._resolve_spotify_uri)에 태운다.
+    const isUnheard = r.already_heard === false;
+    const exportKey = r.track_id != null ? String(r.track_id) : `${r.artist} - ${r.title}`;
+    return `
+    <div class="result-row glass" ${r.track_id != null ? `onclick="openTrackModal(${r.track_id})"` : ""}>
       <label class="row-select" title="플레이리스트에 담기" onclick="event.stopPropagation()">
-        <input type="checkbox" ${SELECTED_FOR_EXPORT.has(r.track_id) ? "checked" : ""}
-               onchange="toggleExportSelection(event, ${r.track_id})">
+        <input type="checkbox" data-export-key="${exportKey}" ${SELECTED_FOR_EXPORT.has(exportKey) ? "checked" : ""}
+               onchange="toggleExportSelection(event, this.dataset.exportKey)">
       </label>
       <div class="result-rank">${i + 1}</div>
       <div class="track-art small">${initials(r.artist)}</div>
       <div class="result-main">
-        <div class="result-title">${r.artist} - ${r.title}</div>
+        <div class="result-title">${r.artist} - ${r.title}${isUnheard ? ' <span class="rel-badge rel-badge-type">미청취</span>' : ""}</div>
         <div class="result-sub">${r.top_features.length ? r.top_features.join(", ") : "공통 특성 없음"}${boredomWeight > 0 || excludeTired ? ` · 질림 ${r.boredom_score.toFixed(2)}` : ""}</div>
       </div>
       <div class="similarity-meter">
         <div class="similarity-bar"><div class="similarity-fill" style="width:${(r.similarity * 100).toFixed(0)}%"></div></div>
         <span class="similarity-val">${r.similarity.toFixed(3)}</span>
       </div>
-      ${feedbackButtons(r.track_id, digMode ? "digging_zone" : "similar", seedId)}
+      ${isUnheard ? "" : feedbackButtons(r.track_id, digMode ? "digging_zone" : "similar", seedId)}
     </div>
-  `).join("");
+  `;
+  }).join("");
 }
 
 /* ---------- Spotify 플레이리스트 내보내기 ---------- */
@@ -737,6 +746,7 @@ function setupSimilarControls() {
   const zoneHigh = document.getElementById("zone-high");
   const boredomWeight = document.getElementById("boredom-weight");
   const excludeTired = document.getElementById("exclude-tired-toggle");
+  const includeUnheard = document.getElementById("include-unheard-toggle");
 
   function updateZoneBar() {
     const low = Number(zoneLow.value) * 100;
@@ -761,6 +771,7 @@ function setupSimilarControls() {
     renderSimilar();
   });
   excludeTired.addEventListener("change", renderSimilar);
+  includeUnheard.addEventListener("change", renderSimilar);
   seedSelect.addEventListener("change", renderSimilar);
 
   updateZoneBar();

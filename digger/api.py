@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from . import cli as cli_module
 from .boredom import compute_boredom_scores
 from .db import connect, insert_feedback
+from .discovery import find_unheard
 from .graph import dig_relations
 from .metadata import spotify
 from .relations import CATEGORIES
@@ -113,9 +114,15 @@ def get_similar(
     zone_high: float = DEFAULT_ZONE_HIGH,
     boredom_weight: float = 0.0,
     exclude_tired_above: float | None = None,
+    include_unheard: bool = False,
     conn: sqlite3.Connection = Depends(get_db),
 ) -> list[dict]:
-    """장르 태그 유사도 기준 유사곡. dig=True면 [zone_low, zone_high] 구간의 디깅 존 탐색."""
+    """장르 태그 유사도 기준 유사곡. dig=True면 [zone_low, zone_high] 구간의 디깅 존 탐색.
+
+    include_unheard=True면 로컬 DB에 없는(=한 번도 안 들어본) Last.fm 후보(discovery.py)도
+    같은 유사도 기준으로 섞어 넣는다 — 결과를 다시 유사도 순 정렬 후 top으로 자르므로,
+    로컬 후보와 미청취 후보가 점수 그대로 경쟁한다.
+    """
     _get_track_row(conn, track_id)
     boredom_scores = (
         compute_boredom_scores(conn) if (boredom_weight > 0 or exclude_tired_above is not None) else None
@@ -145,7 +152,27 @@ def get_similar(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    return [dict(r._asdict()) for r in results]
+    merged = [{**r._asdict(), "already_heard": True} for r in results]
+
+    if include_unheard:
+        for u in find_unheard(conn, track_id, top_n=top):
+            if dig and not (zone_low <= u.similarity <= zone_high):
+                continue
+            merged.append(
+                {
+                    "track_id": None,
+                    "artist": u.artist,
+                    "title": u.title,
+                    "similarity": u.similarity,
+                    "top_features": [],
+                    "boredom_score": 0.0,
+                    "already_heard": False,
+                }
+            )
+        merged.sort(key=lambda r: r["similarity"], reverse=True)
+        merged = merged[:top]
+
+    return merged
 
 
 @app.get("/tracks/{track_id}/relations")
